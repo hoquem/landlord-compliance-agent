@@ -1,0 +1,3 @@
+# Environment variables (real secrets live only in the untracked .env)
+.env
+.env.local
