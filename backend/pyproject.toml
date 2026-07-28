@@ -5,6 +5,7 @@ description = "Landlord compliance agent backend"
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.31.0",
+    "crewai>=1.15.8",
     "fastapi>=0.140.13",
     "httpx>=0.28.1",
     "pydantic-settings>=2.14.2",

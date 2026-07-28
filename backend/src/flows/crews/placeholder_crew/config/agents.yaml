@@ -1,0 +1,10 @@
+placeholder_agent:
+  role: >
+    Placeholder Agent
+  goal: >
+    Placeholder goal for {input_text}. Replace with the real
+    compliance-categorisation agent (see Task 11, CategoriseStatementFlow).
+  backstory: >
+    This is scaffold-only content generated to prove the CrewAI Flow
+    wiring works end to end. It will be replaced by the real agent(s)
+    for categorising landlord compliance statements in Task 11.

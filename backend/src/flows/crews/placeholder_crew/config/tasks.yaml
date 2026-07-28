@@ -1,0 +1,7 @@
+placeholder_task:
+  description: >
+    Placeholder task for {input_text}. Replace with the real
+    compliance-categorisation task (see Task 11, CategoriseStatementFlow).
+  expected_output: >
+    Placeholder expected output; not used until Task 11 replaces this crew.
+  agent: placeholder_agent
