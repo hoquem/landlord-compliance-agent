@@ -102,7 +102,7 @@ Run: `uv run pytest tests/test_health.py -v` → Expected: FAIL (no `src.api.mai
 - Create: `supabase/migrations/0001_core.sql`
 - Test: `backend/tests/db/test_schema.py`
 
-- [ ] **Step 1:** Write `0001_core.sql` exactly per spec data model: `orgs`, `users` (mirror of auth.users with org_id), `entities` (incl. `tax_regime` enum `mtd_itsa|corporation_tax`, `quarter_basis` enum default `tax_year`, PRS fields nullable), `properties` (incl. `finance_cost_classification`, `epc_rating`, `epc_expiry`, `bedroom_count`), `property_ownership` (unique (property_id, entity_id), `ownership_percentage numeric(5,2)`), `tenancies`, `imports`, `transactions` (incl. `hmrc_category` enum with the 15 spec values, `status` enum `unclassified|proposed|confirmed|excluded`, `confidence numeric(3,2)`, `proposed_by`), `compliance_certificates` (type enum, `issue_date`, `expiry_date`, `certificate_ref`, `document_id`), `documents`, `mtd_quarters` (unique (entity_id, tax_year, quarter), one numeric column per HMRC category total, `version`, `generated_at`), `job_queue`, `audit_log`. Every table: `org_id uuid not null references orgs`, timestamps. Constraint: trigger enforcing `sum(ownership_percentage) = 100` per property on confirm-time validation is done in API (documented in SQL comment) — DB enforces `0 < pct <= 100`.
+- [ ] **Step 1:** Write `0001_core.sql` exactly per spec data model: `orgs`, `users` (mirror of auth.users with org_id), `entities` (incl. `tax_regime` enum `mtd_itsa|corporation_tax`, `quarter_basis` enum default `tax_year`, PRS fields nullable), `properties` (incl. `finance_cost_classification`, `epc_rating`, `epc_expiry`, `bedroom_count`), `property_ownership` (unique (property_id, entity_id), `ownership_percentage numeric(5,2)`), `tenancies` (schema-only in MVP — no API/UI until iteration 2's Section 13 work), `imports`, `transactions` (incl. `hmrc_category` enum with the 15 spec values, `status` enum `unclassified|proposed|confirmed|excluded`, `confidence numeric(3,2)`, `proposed_by`), `compliance_certificates` (type enum, `issue_date`, `expiry_date`, `certificate_ref`, `document_id`), `documents`, `mtd_quarters` (unique (entity_id, tax_year, quarter), one numeric column per HMRC category total, `version`, `generated_at`), `job_queue`, `audit_log`. Every table: `org_id uuid not null references orgs`, timestamps. Constraint: trigger enforcing `sum(ownership_percentage) = 100` per property on confirm-time validation is done in API (documented in SQL comment) — DB enforces `0 < pct <= 100`.
 - [ ] **Step 2:** `supabase db reset` → applies cleanly.
 - [ ] **Step 3:** Failing test `test_schema.py`: connects via `DATABASE_URL`, asserts all 13 tables exist and `transactions.hmrc_category` enum has exactly the 15 spec values (guards drift between SQL and Python enum).
 - [ ] **Step 4:** PASS, commit `feat: core schema migration`.
@@ -214,6 +214,7 @@ def test_unknown_format_fails_loudly() -> None:
 - Test: `backend/tests/core/test_quarters.py`
 
 - [ ] **Step 1:** Failing tests: `quarter_for(date(2026, 7, 5)) == (2026, 1)` and `quarter_for(date(2026, 7, 6)) == (2026, 2)` (UK tax-year quarters from 6 April); `cumulative_totals(confirmed_txns, entity_id, tax_year, quarter)` returns YTD per-category totals **from 6 April through quarter end**, ownership-weighted via `split_amount`, excluding `EXCLUDED_FROM_EXPORT` categories from allowable totals but reporting capital separately; Q2 totals ⊇ Q1 totals for same data (cumulative property test).
+- [ ] **Step 1b:** Also failing tests: `next_update_deadline(date)` returns the next statutory quarterly-update deadline — 7 Aug, 7 Nov, 7 Feb, 7 May (the 7th of the month following quarter-end); pin all four boundaries. Transactions with `property_id` null (e.g. `use_of_home_allowance`, `travel_vehicle`) attribute 100% to `transactions.entity_id` — no ownership split applies (spec: entity_id determines whose ledger unallocated lines sit on).
 - [ ] **Step 2:** Implement; pure functions over passed-in data (no DB). → PASS, commit.
 
 ---
@@ -275,7 +276,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Test: `backend/tests/api/test_portfolio.py`
 
 - [ ] **Step 1:** Failing tests: `POST/GET/PATCH /entities` (name, tax_regime, quarter_basis); `POST/GET/PATCH /properties` (address, finance_cost_classification, epc fields, bedroom_count); `PUT /properties/{id}/ownership` accepts a full list of `{entity_id, percentage}` replacing prior rows atomically — rejects with 422 if percentages don't sum to 100 (loud, names the sum it got); all scoped to caller's org.
-- [ ] **Step 2:** Implement router + repository, PASS, commit `feat: portfolio setup endpoints`.
+- [ ] **Step 2:** Implement router + repository, PASS, commit `feat: portfolio setup endpoints`. Ownership and entity mutations write `audit_log` rows (ownership percentages directly change money computation — spec: audit every state change to money data). Certificates CRUD (Task 17) likewise writes audit rows.
 - [ ] **Step 3:** `scripts/seed_org.py`: idempotent CLI (`uv run python scripts/seed_org.py --email m.hoque@gmail.com --org "Hoque Portfolio"`) that creates the org, links the auth user, and prints next steps (add entities/properties via the UI or API). Unit-test the idempotency (second run = no duplicates). Commit.
 
 ### Task 14: Imports endpoint
@@ -293,7 +294,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Create: `backend/src/api/routers/transactions.py`
 - Test: `backend/tests/api/test_transactions.py`
 
-- [ ] **Step 1:** Failing tests: `GET /transactions?import_id=&status=` returns lines with proposal fields; `POST /transactions/{id}/confirm` body `{hmrc_category, property_id}` — sets status `confirmed`, writes `audit_log` row (actor=user, before/after JSON); confirming with a property whose ownership doesn't sum to 100 → 422 with explanation; `POST /transactions/{id}/exclude` for personal lines; bulk `POST /transactions/confirm-batch` (all-or-nothing transaction).
+- [ ] **Step 1:** Failing tests: `GET /transactions?import_id=&status=` returns lines with proposal fields; `POST /transactions/{id}/confirm` body `{hmrc_category, property_id}` — sets status `confirmed`, writes `audit_log` row (actor=user, before/after JSON); confirming with a property whose ownership doesn't sum to 100 → 422 with explanation; `POST /transactions/{id}/exclude` for personal lines (writes an `audit_log` row, same as confirm); bulk `POST /transactions/confirm-batch` (all-or-nothing transaction).
 - [ ] **Step 2:** Implement, PASS, commit.
 
 ### Task 16: Quarterly export endpoint
@@ -355,7 +356,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 ### Task 22: Certificates + dashboard
 
 - Files: `frontend/lib/features/certificates/`, `frontend/lib/features/dashboard/`, `frontend/lib/features/portfolio/`
-- [ ] Certificates: per-property table, add/edit form, expiry status colours (RAG via theme tokens). Dashboard: cards — unreviewed transaction count, next quarter deadline (5 Aug/5 Nov/5 Feb/5 May submission windows), expiring certificates; export button → `POST /exports/quarter` → download. Widget tests. Commit.
+- [ ] Certificates: per-property table, add/edit form, expiry status colours (RAG via theme tokens). Dashboard: cards — unreviewed transaction count, next quarterly-update deadline (**7 Aug / 7 Nov / 7 Feb / 7 May** — the 7th of the month after quarter-end; quarter-ends are 5 Jul/5 Oct/5 Jan/5 Apr), expiring certificates; export button → `POST /exports/quarter` → download. Deadline computation lives in `backend/src/core/quarters.py` (`next_update_deadline(today) -> date`) with unit tests pinning all four statutory dates — the frontend renders it, never computes it. Widget tests. Commit.
 - [ ] Portfolio settings screen (uses Task 13b endpoints): list/add/edit entities and properties; ownership editor with live sum-to-100 validation mirroring the API rule. Widget test: ownership form blocks save at ≠100%. Commit.
 
 ---
