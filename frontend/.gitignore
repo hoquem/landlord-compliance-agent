@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Re-include lib/: ~/.gitignore_global has a bare "lib/" rule (Python artefacts)
+# that would otherwise silently exclude all Flutter source. Repo-level negation wins.
+!lib/
