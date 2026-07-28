@@ -40,7 +40,7 @@ docs/
 **Files:**
 - Create: `backend/pyproject.toml`, `backend/src/api/main.py`, `backend/tests/test_health.py`
 
-- [ ] **Step 1:** `cd backend && uv init --python 3.12 && uv add fastapi 'uvicorn[standard]' sqlalchemy asyncpg pydantic-settings httpx && uv add --dev pytest pytest-asyncio ruff`
+- [ ] **Step 1:** `cd backend && uv init --python 3.12 && uv add fastapi 'uvicorn[standard]' sqlalchemy asyncpg pydantic-settings httpx && uv add --dev pytest pytest-asyncio ruff`. Later tasks add their own deps as needed (`supabase` storage client in Task 14, `weasyprint` in Task 16, `crewai` in Task 3) — add at point of use, not up front.
 - [ ] **Step 2:** Write failing test `backend/tests/test_health.py`:
 
 ```python
@@ -102,7 +102,7 @@ Run: `uv run pytest tests/test_health.py -v` → Expected: FAIL (no `src.api.mai
 - Create: `supabase/migrations/0001_core.sql`
 - Test: `backend/tests/db/test_schema.py`
 
-- [ ] **Step 1:** Write `0001_core.sql` exactly per spec data model: `orgs`, `users` (mirror of auth.users with org_id), `entities` (incl. `tax_regime` enum `mtd_itsa|corporation_tax`, `quarter_basis` enum default `tax_year`, PRS fields nullable), `properties` (incl. `finance_cost_classification`, `epc_rating`, `epc_expiry`, `bedroom_count`), `property_ownership` (unique (property_id, entity_id), `ownership_percentage numeric(5,2)`), `tenancies` (schema-only in MVP — no API/UI until iteration 2's Section 13 work), `imports`, `transactions` (incl. `hmrc_category` enum with the 15 spec values, `status` enum `unclassified|proposed|confirmed|excluded`, `confidence numeric(3,2)`, `proposed_by`), `compliance_certificates` (type enum, `issue_date`, `expiry_date`, `certificate_ref`, `document_id`), `documents`, `mtd_quarters` (unique (entity_id, tax_year, quarter), one numeric column per HMRC category total, `version`, `generated_at`), `job_queue`, `audit_log`. Every table: `org_id uuid not null references orgs`, timestamps. Constraint: trigger enforcing `sum(ownership_percentage) = 100` per property on confirm-time validation is done in API (documented in SQL comment) — DB enforces `0 < pct <= 100`.
+- [ ] **Step 1:** Write `0001_core.sql` exactly per spec data model: `orgs`, `users` (mirror of auth.users with org_id), `entities` (incl. `tax_regime` enum `mtd_itsa|corporation_tax`, `quarter_basis` enum default `tax_year`, PRS fields nullable), `properties` (incl. `finance_cost_classification`, `epc_rating`, `epc_expiry`, `bedroom_count`, `licensing_flag`), `property_ownership` (unique (property_id, entity_id), `ownership_percentage numeric(5,2)`), `tenancies` (schema-only in MVP — no API/UI until iteration 2's Section 13 work), `imports`, `transactions` (incl. `hmrc_category` enum with the 15 spec values, `status` enum `unclassified|proposed|confirmed|excluded`, `confidence numeric(3,2)`, `proposed_by`), `compliance_certificates` (type enum, `issue_date`, `expiry_date`, `certificate_ref`, `document_id`), `documents`, `mtd_quarters` (unique (entity_id, tax_year, quarter), one numeric column per HMRC category total, `version`, `generated_at`), `job_queue`, `audit_log`. Every table: `org_id uuid not null references orgs`, timestamps. Constraint: trigger enforcing `sum(ownership_percentage) = 100` per property on confirm-time validation is done in API (documented in SQL comment) — DB enforces `0 < pct <= 100`.
 - [ ] **Step 2:** `supabase db reset` → applies cleanly.
 - [ ] **Step 3:** Failing test `test_schema.py`: connects via `DATABASE_URL`, asserts all 13 tables exist and `transactions.hmrc_category` enum has exactly the 15 spec values (guards drift between SQL and Python enum).
 - [ ] **Step 4:** PASS, commit `feat: core schema migration`.
@@ -165,7 +165,7 @@ EXCLUDED_FROM_EXPORT = {HmrcCategory.CAPITAL_EXPENSE, HmrcCategory.PERSONAL_NON_
 ### Task 8: Statement parser
 
 **Files:**
-- Create: `backend/src/core/parser.py`, `backend/tests/fixtures/statements/generic.csv`, `backend/tests/fixtures/statements/malformed.csv`
+- Create: `backend/src/core/parser.py`, `backend/tests/fixtures/statements/generic.csv`, `backend/tests/fixtures/statements/malformed.csv`, `backend/tests/fixtures/statements/unknown_headers.csv`
 - Test: `backend/tests/core/test_parser.py`
 
 **NOTE (spec open question 3):** real bank fixture files must be swapped in when Mahmud provides statement exports; start with a generic `Date,Description,Amount,Balance` format and a format-registry design so adding a bank = adding a `StatementFormat` entry + fixture.
@@ -277,7 +277,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 
 - [ ] **Step 1:** Failing tests: `POST/GET/PATCH /entities` (name, tax_regime, quarter_basis); `POST/GET/PATCH /properties` (address, finance_cost_classification, epc fields, bedroom_count); `PUT /properties/{id}/ownership` accepts a full list of `{entity_id, percentage}` replacing prior rows atomically — rejects with 422 if percentages don't sum to 100 (loud, names the sum it got); all scoped to caller's org.
 - [ ] **Step 2:** Implement router + repository, PASS, commit `feat: portfolio setup endpoints`. Ownership and entity mutations write `audit_log` rows (ownership percentages directly change money computation — spec: audit every state change to money data). Certificates CRUD (Task 17) likewise writes audit rows.
-- [ ] **Step 3:** `scripts/seed_org.py`: idempotent CLI (`uv run python scripts/seed_org.py --email m.hoque@gmail.com --org "Hoque Portfolio"`) that creates the org, links the auth user, and prints next steps (add entities/properties via the UI or API). Unit-test the idempotency (second run = no duplicates). Commit.
+- [ ] **Step 3:** `scripts/seed_org.py`: idempotent CLI (`uv run python scripts/seed_org.py --email m.hoque@gmail.com --org "Hoque Portfolio"`) that creates the org and links the auth user (created beforehand via Supabase Studio or `supabase auth` CLI — Task 19 builds sign-in only, not sign-up), and prints next steps (add entities/properties via the UI or API). Unit-test the idempotency (second run = no duplicates). Commit.
 
 ### Task 14: Imports endpoint
 
@@ -303,7 +303,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Create: `backend/src/api/routers/exports.py`, `backend/src/core/export_pack.py`
 - Test: `backend/tests/api/test_exports.py`, `backend/tests/core/test_export_pack.py`
 
-- [ ] **Step 1 (BLOCKER CHECK — spec open question 1):** Before coding, verify aggregation level against HMRC Property Business API docs (https://developer.service.hmrc.gov.uk/api-documentation/docs/api/service/property-business-api/) — WebFetch the quarterly-submission schema; record the answer in the spec's open-questions section and proceed with per-entity aggregation (per-property detail as a supplementary sheet) if confirmed. Surface to Mahmud if the docs contradict the design.
+- [ ] **Step 1 (BLOCKER CHECK — spec open question 1):** Before coding, verify aggregation level against HMRC Property Business API docs (https://developer.service.hmrc.gov.uk/api-documentation/docs/api/service/property-business-api/) — WebFetch the quarterly-submission schema; record the answer in the spec's open-questions section and proceed with per-entity aggregation (per-property detail as a supplementary sheet) if confirmed. Surface to Mahmud if the docs contradict the design. If the developer hub is unreachable at implementation time, proceed with per-entity aggregation (the spec-safe default) and leave the open question flagged for Mahmud rather than dead-ending the task.
 - [ ] **Step 2:** Failing core tests: `build_export_pack(entity, tax_year, quarter, txns, ownerships)` → refuses (`ExportBlockedError` listing blocker transaction ids) if any txn in period is `unclassified`/`proposed`; produces CSV (one row per category, cumulative YTD) + per-property supplementary CSV; Ltd entities → `SimplePnlPack` instead (no mtd_quarters row).
 - [ ] **Step 2b (spec §Error handling — decrease guard):** Failing test: exporting a quarter whose cumulative totals are LOWER in any category than the latest stored `mtd_quarters` row for an earlier-or-equal quarter of the same entity/tax-year raises `CumulativeDecreaseError` naming the category, prior total, and new total — catches transactions deleted/edited after a prior export. Test both the legitimate re-export (same quarter, higher totals → new version row, OK) and the decrease case (→ loud error; resolution is a human decision, not an override flag).
 - [ ] **Step 3:** API tests: `POST /exports/quarter` creates/increments `mtd_quarters` version row, stores generated files as `documents`, returns download refs; PDF rendering = simple HTML→PDF (weasyprint) of the same numbers (snapshot test on HTML, not PDF bytes).
