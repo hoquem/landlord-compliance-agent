@@ -27,6 +27,10 @@ docs/
 
 **Conventions for every task:** TDD (test first, watch it fail, minimal code, watch it pass, commit). Docstrings in reStructuredText. Fail loudly — no silent catches, no default fallbacks. Never mark a step done without showing the passing command output. Commit after every green.
 
+**Security convention (spec §Security):** statement content (descriptions, amounts) must never appear in application logs at any level; agent prompts include only the fields categorisation needs. Applies to Tasks 11, 14, 18 — reviewers check for stray `logger.*(line...)` calls.
+
+**Capital-vs-revenue note:** the spec's "capital flag" is represented by the `CAPITAL_EXPENSE` enum value, not a separate boolean. Do not add a redundant flag column.
+
 ---
 
 ## Phase 0 — Scaffolding
@@ -237,7 +241,7 @@ class StatementProposals(BaseModel):
 ```
 
 Failing test: `StatementProposals` rejects out-of-range confidence and unknown category (Pydantic validation is the contract the LLM is retried against).
-- [ ] **Step 2:** Implement `CategoriseStatementFlow` (CrewAI `Flow` with typed state): input = parsed lines + org property list + up to 50 most recent confirmed transactions (few-shot); one step calls `Agent.kickoff(prompt, response_format=StatementProposals)`. Agent config in `src/flows/crews/config/` YAML per CrewAI convention: role "UK landlord bookkeeping specialist", explicit instruction that uncertain lines get low confidence and `PERSONAL_NON_BUSINESS` is for non-business lines, never a guess. LLM: `anthropic/claude-sonnet-5` (cost-effective for classification; model id in config, not code).
+- [ ] **Step 2:** Implement `CategoriseStatementFlow` (CrewAI `Flow` with typed state): input = parsed lines + org property list + up to 50 most recent confirmed transactions (few-shot); one step calls `Agent.kickoff(prompt, response_format=StatementProposals)`. Agent config in `src/flows/crews/config/` YAML per CrewAI convention: role "UK landlord bookkeeping specialist", explicit instruction that uncertain lines get low confidence and `PERSONAL_NON_BUSINESS` is for non-business lines, never a guess. LLM: `anthropic/claude-sonnet-5` (cost-effective for classification; model id in config, not code — verify the exact CrewAI/LiteLLM model string at implementation time against the claude-api skill/docs).
 - [ ] **Step 3:** Unit test with mocked `Agent.kickoff` returning a fixture `StatementProposals`: flow maps proposals onto line indices, errors if the LLM returns indices out of range (loud). → PASS, commit.
 
 ### Task 12: Golden-set eval harness
@@ -261,6 +265,18 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 
 - [ ] **Step 1:** Failing tests: request without bearer → 401; with valid Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) → dependency yields `(user_id, org_id)`; JWT for user with no org row → 403 (loud, not silent org-less access).
 - [ ] **Step 2:** Implement, PASS, commit.
+
+### Task 13b: Portfolio setup — entities, properties, ownership (foundational reference data)
+
+Without this the delivered MVP cannot be used: every later task assumes orgs/entities/properties exist.
+
+**Files:**
+- Create: `backend/src/api/routers/portfolio.py`, `backend/scripts/seed_org.py`
+- Test: `backend/tests/api/test_portfolio.py`
+
+- [ ] **Step 1:** Failing tests: `POST/GET/PATCH /entities` (name, tax_regime, quarter_basis); `POST/GET/PATCH /properties` (address, finance_cost_classification, epc fields, bedroom_count); `PUT /properties/{id}/ownership` accepts a full list of `{entity_id, percentage}` replacing prior rows atomically — rejects with 422 if percentages don't sum to 100 (loud, names the sum it got); all scoped to caller's org.
+- [ ] **Step 2:** Implement router + repository, PASS, commit `feat: portfolio setup endpoints`.
+- [ ] **Step 3:** `scripts/seed_org.py`: idempotent CLI (`uv run python scripts/seed_org.py --email m.hoque@gmail.com --org "Hoque Portfolio"`) that creates the org, links the auth user, and prints next steps (add entities/properties via the UI or API). Unit-test the idempotency (second run = no duplicates). Commit.
 
 ### Task 14: Imports endpoint
 
@@ -288,6 +304,7 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 
 - [ ] **Step 1 (BLOCKER CHECK — spec open question 1):** Before coding, verify aggregation level against HMRC Property Business API docs (https://developer.service.hmrc.gov.uk/api-documentation/docs/api/service/property-business-api/) — WebFetch the quarterly-submission schema; record the answer in the spec's open-questions section and proceed with per-entity aggregation (per-property detail as a supplementary sheet) if confirmed. Surface to Mahmud if the docs contradict the design.
 - [ ] **Step 2:** Failing core tests: `build_export_pack(entity, tax_year, quarter, txns, ownerships)` → refuses (`ExportBlockedError` listing blocker transaction ids) if any txn in period is `unclassified`/`proposed`; produces CSV (one row per category, cumulative YTD) + per-property supplementary CSV; Ltd entities → `SimplePnlPack` instead (no mtd_quarters row).
+- [ ] **Step 2b (spec §Error handling — decrease guard):** Failing test: exporting a quarter whose cumulative totals are LOWER in any category than the latest stored `mtd_quarters` row for an earlier-or-equal quarter of the same entity/tax-year raises `CumulativeDecreaseError` naming the category, prior total, and new total — catches transactions deleted/edited after a prior export. Test both the legitimate re-export (same quarter, higher totals → new version row, OK) and the decrease case (→ loud error; resolution is a human decision, not an override flag).
 - [ ] **Step 3:** API tests: `POST /exports/quarter` creates/increments `mtd_quarters` version row, stores generated files as `documents`, returns download refs; PDF rendering = simple HTML→PDF (weasyprint) of the same numbers (snapshot test on HTML, not PDF bytes).
 - [ ] **Step 4:** Implement, PASS, commit.
 
@@ -310,7 +327,7 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 - Create: `backend/src/worker/main.py`, `backend/src/worker/jobs.py`
 - Test: `backend/tests/worker/test_poller.py`
 
-- [ ] **Step 1:** Failing tests: poller claims queued jobs with `FOR UPDATE SKIP LOCKED`, marks `running`→`done`; a job whose handler raises marks `failed` with the exception string stored and NO retry loop (fail loudly, visible in UI); `categorise` handler: loads unclassified transactions for the import, runs `CategoriseStatementFlow` (mocked in test), writes proposals (status `proposed`, confidence, `proposed_by`=job id) + audit rows.
+- [ ] **Step 1:** Failing tests: poller claims queued jobs with `FOR UPDATE SKIP LOCKED`, marks `running`→`done`; a job whose handler raises marks `failed` with the exception string stored and NO retry loop (fail loudly, visible in UI); `categorise` handler: loads unclassified transactions for the import, runs `CategoriseStatementFlow` (mocked in test), writes proposals (status `proposed`, confidence, `proposed_by`=job id) + audit rows. **Failed-job visibility:** a failed `categorise` job also sets its import's status to `categorisation_failed` (add enum value in migration if not present), so `GET /imports` — and the imports screen (Task 20) — surface it; a stuck import must never look merely "pending".
 - [ ] **Step 2:** Implement (`asyncio` loop, `poll_interval=2s`, graceful SIGTERM), PASS, commit.
 - [ ] **Step 3:** Add `make dev` (or `justfile`): `supabase start`, API `uvicorn`, worker, `flutter run -d chrome`. Commit.
 
@@ -337,8 +354,9 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 
 ### Task 22: Certificates + dashboard
 
-- Files: `frontend/lib/features/certificates/`, `frontend/lib/features/dashboard/`
+- Files: `frontend/lib/features/certificates/`, `frontend/lib/features/dashboard/`, `frontend/lib/features/portfolio/`
 - [ ] Certificates: per-property table, add/edit form, expiry status colours (RAG via theme tokens). Dashboard: cards — unreviewed transaction count, next quarter deadline (5 Aug/5 Nov/5 Feb/5 May submission windows), expiring certificates; export button → `POST /exports/quarter` → download. Widget tests. Commit.
+- [ ] Portfolio settings screen (uses Task 13b endpoints): list/add/edit entities and properties; ownership editor with live sum-to-100 validation mirroring the API rule. Widget test: ownership form blocks save at ≠100%. Commit.
 
 ---
 
