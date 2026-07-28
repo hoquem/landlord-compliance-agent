@@ -1,8 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Landlord compliance agent backend"
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.31.0",
