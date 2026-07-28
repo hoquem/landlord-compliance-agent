@@ -44,8 +44,8 @@ docs/
 - [ ] **Step 2:** Write failing test `backend/tests/test_health.py`:
 
 ```python
-from httpx import ASGITransport, AsyncClient
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from src.api.main import app
 
