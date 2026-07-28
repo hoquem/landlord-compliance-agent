@@ -33,6 +33,7 @@ Mahmud holds a mixed personal + Ltd property portfolio, currently managed via sp
 | Component | Tech | Responsibility |
 |---|---|---|
 | Frontend | Flutter (web build now; iOS/Android later from same codebase) | Dashboard, review/confirm screens, uploads, exports |
+| Design system | Material 3 Expressive + flutter_animate | See "Design system & motion" below |
 | API | FastAPI (Python, uv) | Business logic, validation, export generation, auth via Supabase JWT |
 | Worker | Python process running CrewAI Flows | Background agent jobs, triggered via job queue rows (Postgres) — never inline in web requests |
 | Agent flows | CrewAI (scaffolded with `crewai create flow landlord_compliance`) | `CategoriseStatementFlow` (MVP); `RentReviewFlow`, `ComplianceScanFlow`, `QuarterlySummaryFlow` (iteration 2+) |
@@ -79,6 +80,16 @@ All tables carry `org_id` (RLS) plus `created_at`/`updated_at`. Validated agains
 - Output per line: hmrc_category, property_id or null, capital flag, confidence 0–1, one-line rationale.
 - Confidence threshold (initial 0.8, tunable): below it, the line is visually flagged "needs attention" in review. **No auto-confirmation at any confidence in MVP.**
 - Flow errors mark the job failed with the error surfaced — no partial silent results.
+
+## Design system & motion
+
+Requirement from Mahmud: a polished design system with motion.
+
+- **Foundation: Material 3 Expressive** — Flutter-native, seed-based `ColorScheme` with adaptive light/dark, and M3's motion system (spring physics, emphasized/standard easing) for navigation transitions and state changes.
+- **Micro-interactions: `flutter_animate`** — staggered list entrances on the review screen, confidence-flag pulses, confirm-action feedback, dashboard status transitions.
+- **Tokens centralised** in a single theme package (colours, type scale, spacing, radii, durations/curves) so productisation-era branding is a token swap, not a rewrite.
+- **Motion principles:** purposeful and fast (150–350ms; nothing decorative blocking input), consistent easing from the token set, and `MediaQuery.disableAnimations` respected for reduced-motion accessibility.
+- UI implementation work loads the `impeccable` frontend-design skill for hierarchy/polish decisions.
 
 ## Error handling
 
