@@ -455,3 +455,41 @@ async def test_cross_tenant_isolation_via_postgrest(cross_tenant_fixture: _Cross
         )
         assert resp.status_code == 200
         assert [row["city"] for row in resp.json()] == ["Luton"]
+
+        # Write-side check: user A must not be able to plant a row *in org
+        # B's space* either. The assertions above only exercise the
+        # `using` clause (read visibility); this exercises `with check`
+        # (write eligibility) -- a different failure mode (a write-side
+        # tenant escape) that `using` alone can't catch.
+        resp = await client.post(
+            f"{supabase_url}/rest/v1/properties",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {cross_tenant_fixture.jwt_a}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "org_id": cross_tenant_fixture.org_b_id,
+                "address_line1": "2 Escape Street",
+                "city": "Elsewhere",
+                "postcode": "LU2 2BB",
+                "finance_cost_classification": "residential",
+            },
+        )
+        assert resp.status_code == 403, (
+            f"user A inserting into org B's space should be rejected by `with check`, "
+            f"got {resp.status_code} {resp.text}"
+        )
+
+        # The row must not have landed under either identity: re-check
+        # user A's own view is still exactly the one legitimate property.
+        resp = await client.get(
+            f"{supabase_url}/rest/v1/properties",
+            headers={"apikey": anon_key, "Authorization": f"Bearer {cross_tenant_fixture.jwt_a}"},
+            params={"select": "id"},
+        )
+        assert resp.status_code == 200
+        assert [row["id"] for row in resp.json()] == [property_id], (
+            "the rejected cross-org insert must not have left a stray row behind"
+        )

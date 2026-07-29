@@ -327,7 +327,17 @@ create policy mtd_quarters_tenant_isolation on public.mtd_quarters
 
 grant select, insert, update, delete on public.mtd_quarters to authenticated;
 
--- job_queue
+-- job_queue -- worker-internal by design (Task 18: the worker polls this
+-- table service-side; jobs are enqueued service-side too, e.g. by the
+-- imports endpoint in Task 14). Grant select only, same reasoning as
+-- audit_log's carve-out below: granting insert/update/delete to
+-- `authenticated` would let any signed-in client enqueue arbitrary worker
+-- jobs (`type` + free-form `payload`) in their own org via PostgREST --
+-- a capability nothing in the design needs, since job status is meant to
+-- surface to the frontend via `imports.status`, not by reading this table
+-- directly. select is kept (rather than dropped entirely) in case a later
+-- task wants to show raw job state; nothing currently reads it via
+-- PostgREST either, so this is a conservative default, not a requirement.
 alter table public.job_queue enable row level security;
 
 create policy job_queue_tenant_isolation on public.job_queue
@@ -335,7 +345,7 @@ create policy job_queue_tenant_isolation on public.job_queue
   using (org_id = (select public.current_org_id()))
   with check (org_id = (select public.current_org_id()));
 
-grant select, insert, update, delete on public.job_queue to authenticated;
+grant select on public.job_queue to authenticated;
 
 -- audit_log -- append-only by design (see 0001: no updated_at/update
 -- trigger). Grant select + insert only; deliberately no update/delete, so
