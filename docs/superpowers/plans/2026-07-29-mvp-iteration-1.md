@@ -356,6 +356,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 ### Task 22: Certificates + dashboard
 
 - Files: `frontend/lib/features/certificates/`, `frontend/lib/features/dashboard/`, `frontend/lib/features/portfolio/`
+- [ ] **Prerequisite (from Task 4 review):** add RAG/status colours as a `ThemeExtension<StatusColors>` registered per-brightness inside `AppTheme._build()` — NOT bare `Color` constants in tokens.dart (bare constants have no light/dark variant). Screens read `Theme.of(context).extension<StatusColors>()`.
 - [ ] Certificates: per-property table, add/edit form, expiry status colours (RAG via theme tokens). Dashboard: cards — unreviewed transaction count, next quarterly-update deadline (**7 Aug / 7 Nov / 7 Feb / 7 May** — the 7th of the month after quarter-end; quarter-ends are 5 Jul/5 Oct/5 Jan/5 Apr), expiring certificates; export button → `POST /exports/quarter` → download. Deadline computation lives in `backend/src/core/quarters.py` (`next_update_deadline(today) -> date`) with unit tests pinning all four statutory dates — the frontend renders it, never computes it. Widget tests. Commit.
 - [ ] Portfolio settings screen (uses Task 13b endpoints): list/add/edit entities and properties; ownership editor with live sum-to-100 validation mirroring the API rule. Widget test: ownership form blocks save at ≠100%. Commit.
 
