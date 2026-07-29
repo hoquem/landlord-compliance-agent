@@ -153,3 +153,67 @@ async def test_hmrc_category_enum_has_exactly_15_spec_values() -> None:
         f"expected ({len(EXPECTED_HMRC_CATEGORIES)}): {EXPECTED_HMRC_CATEGORIES}\n"
         f"actual   ({len(actual_values)}): {actual_values}"
     )
+
+
+@pytest.mark.asyncio
+async def test_mtd_quarters_tax_year_check_rejects_bad_format() -> None:
+    """``tax_year`` must match the pinned UK tax-year convention, e.g. '2026-27'.
+
+    Row identity (the entity/tax_year/quarter/version unique constraint)
+    and the Task 16 cumulative-decrease guard both key on this exact
+    string, so a malformed value must be rejected at the DB -- not just
+    by convention -- to keep the format single-sourced.
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
+            async with conn.transaction():
+                org_id = await conn.fetchval(
+                    "insert into orgs (name) values ('schema test org') returning id"
+                )
+                entity_id = await conn.fetchval(
+                    """
+                    insert into entities (org_id, name, tax_regime)
+                    values ($1, 'schema test entity', 'mtd_itsa')
+                    returning id
+                    """,
+                    org_id,
+                )
+                await conn.execute(
+                    """
+                    insert into mtd_quarters (org_id, entity_id, tax_year, quarter)
+                    values ($1, $2, '2026', 'Q1')
+                    """,
+                    org_id,
+                    entity_id,
+                )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_transactions_import_id_is_nullable() -> None:
+    """``import_id`` must be nullable.
+
+    Null represents a manually-entered claim with no bank statement line
+    (e.g. flat-rate use_of_home_allowance). The MVP write path (imports
+    endpoint) always sets it; manual-claim entry arrives in a later
+    iteration.
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        is_nullable = await conn.fetchval(
+            """
+            select is_nullable
+            from information_schema.columns
+            where table_schema = 'public'
+              and table_name = 'transactions'
+              and column_name = 'import_id'
+            """
+        )
+    finally:
+        await conn.close()
+
+    assert is_nullable == "YES", (
+        f"transactions.import_id should be nullable (found is_nullable={is_nullable!r})"
+    )

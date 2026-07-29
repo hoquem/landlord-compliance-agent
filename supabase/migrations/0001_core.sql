@@ -310,11 +310,16 @@ for each row execute function set_updated_at();
 -- For transactions with property_id null (unallocated or non-property),
 -- entity_id determines whose ledger the line sits on pending allocation
 -- or exclusion.
+--
+-- import_id is nullable: null = a manually-entered claim with no bank
+-- statement line (e.g. flat-rate use_of_home_allowance). The MVP write
+-- path (imports endpoint) always sets it; manual-claim entry arrives in
+-- a later iteration.
 -- ---------------------------------------------------------------------------
 create table public.transactions (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
-  import_id uuid not null references public.imports (id),
+  import_id uuid references public.imports (id),
   entity_id uuid not null references public.entities (id),
   property_id uuid references public.properties (id),
   date date not null,
@@ -403,12 +408,19 @@ for each row execute function set_updated_at();
 -- ITSA quarterly update. `personal_non_business` is deliberately excluded:
 -- by definition it is never reported to HMRC, so it has no place in a
 -- submission total.
+--
+-- tax_year format is pinned to UK tax year notation, e.g. '2026-27'
+-- (4-digit start year, hyphen, 2-digit end year). Row identity (the
+-- entity/tax_year/quarter/version unique constraint below) and the
+-- Task 16 cumulative-decrease guard both key on this exact string, so the
+-- format must be single-sourced -- Task 10's format_tax_year() is the one
+-- place that produces it.
 -- ---------------------------------------------------------------------------
 create table public.mtd_quarters (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
   entity_id uuid not null references public.entities (id),
-  tax_year text not null,
+  tax_year text not null check (tax_year ~ '^\d{4}-\d{2}$'),
   quarter mtd_quarter_number not null,
   version integer not null default 1,
   rent_income_total numeric(12, 2) not null default 0,
