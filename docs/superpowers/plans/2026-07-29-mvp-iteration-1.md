@@ -332,6 +332,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Create: `backend/src/worker/main.py`, `backend/src/worker/jobs.py`
 - Test: `backend/tests/worker/test_poller.py`
 
+- [ ] **Step 0 (from Task 11 review note):** the categorise handler must not enqueue/run the flow for an import with ZERO unclassified transactions — `CategoriseStatementFlow` accepts empty lines and would make a pointless LLM call; guard in the worker (skip + mark import parsed/complete) with a test.
 - [ ] **Step 1:** Failing tests: poller claims queued jobs with `FOR UPDATE SKIP LOCKED`, marks `running`→`done`; a job whose handler raises marks `failed` with the exception string stored and NO retry loop (fail loudly, visible in UI); `categorise` handler: loads unclassified transactions for the import, runs `CategoriseStatementFlow` (mocked in test), writes proposals (status `proposed`, confidence, `proposed_by`=job id) + audit rows. **Failed-job visibility:** a failed `categorise` job also sets its import's status to `categorisation_failed` (add enum value in migration if not present), so `GET /imports` — and the imports screen (Task 20) — surface it; a stuck import must never look merely "pending".
 - [ ] **Step 2:** Implement (`asyncio` loop, `poll_interval=2s`, graceful SIGTERM), PASS, commit.
 - [ ] **Step 3:** Add `make dev` (or `justfile`): `supabase start`, API `uvicorn`, worker, `flutter run -d chrome`. Commit.
