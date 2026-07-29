@@ -217,3 +217,77 @@ async def test_transactions_import_id_is_nullable() -> None:
     assert is_nullable == "YES", (
         f"transactions.import_id should be nullable (found is_nullable={is_nullable!r})"
     )
+
+
+def test_database_url_raises_loudly_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_database_url()`` must fail loudly, not skip, when unset."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL is not set"):
+        _database_url()
+
+
+class _RollbackTestTransaction(Exception):
+    """Internal sentinel raised to force a rollback of a successful test transaction."""
+
+
+@pytest.mark.asyncio
+async def test_deleting_import_cascades_to_its_transactions() -> None:
+    """Deleting an import must delete its transactions with it (ON DELETE CASCADE).
+
+    Confirms the Task 5 review controller decision: null ``import_id``
+    already has a distinct meaning (manual claim), so orphaning
+    bank-derived transaction rows via SET NULL would silently misclassify
+    them -- CASCADE is correct here, unlike every other FK in this schema.
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        async with conn.transaction():
+            org_id = await conn.fetchval(
+                "insert into orgs (name) values ('cascade test org') returning id"
+            )
+            entity_id = await conn.fetchval(
+                """
+                insert into entities (org_id, name, tax_regime)
+                values ($1, 'cascade test entity', 'mtd_itsa')
+                returning id
+                """,
+                org_id,
+            )
+            import_id = await conn.fetchval(
+                """
+                insert into imports (org_id, entity_id, file_path, source_bank)
+                values ($1, $2, 'statements/test.csv', 'Test Bank')
+                returning id
+                """,
+                org_id,
+                entity_id,
+            )
+            transaction_id = await conn.fetchval(
+                """
+                insert into transactions
+                    (org_id, import_id, entity_id, date, amount, direction, description)
+                values
+                    ($1, $2, $3, current_date, 10.00, 'in', 'cascade test line')
+                returning id
+                """,
+                org_id,
+                import_id,
+                entity_id,
+            )
+
+            await conn.execute("delete from imports where id = $1", import_id)
+
+            remaining = await conn.fetchval(
+                "select count(*) from transactions where id = $1", transaction_id
+            )
+            assert remaining == 0, (
+                "transaction row survived deletion of its import; "
+                "expected ON DELETE CASCADE on transactions.import_id"
+            )
+
+            # Roll back so this test leaves no residual data behind.
+            raise _RollbackTestTransaction
+    except _RollbackTestTransaction:
+        pass
+    finally:
+        await conn.close()

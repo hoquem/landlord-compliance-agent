@@ -139,6 +139,13 @@ create type actor_type as enum (
 
 -- ---------------------------------------------------------------------------
 -- orgs -- tenant root. No org_id column: this table IS the tenant.
+--
+-- Org deletion policy: every `org_id` FK in this file deliberately uses
+-- the default NO ACTION (i.e. deleting an org is blocked while any
+-- dependent row exists), not CASCADE. Tenant financial and compliance
+-- data must never be hard-deleted as a side effect of deleting the
+-- parent org. Org offboarding is a soft-delete/archival concern and is
+-- out of MVP scope.
 -- ---------------------------------------------------------------------------
 create table public.orgs (
   id uuid primary key default gen_random_uuid(),
@@ -238,7 +245,8 @@ create table public.property_ownership (
 );
 
 create index idx_property_ownership_org_id on public.property_ownership (org_id);
-create index idx_property_ownership_property_id on public.property_ownership (property_id);
+-- No idx_property_ownership_property_id: property_id is the leading column
+-- of uq_property_ownership_property_entity, which already covers it.
 create index idx_property_ownership_entity_id on public.property_ownership (entity_id);
 
 create trigger trg_property_ownership_set_updated_at
@@ -315,11 +323,18 @@ for each row execute function set_updated_at();
 -- statement line (e.g. flat-rate use_of_home_allowance). The MVP write
 -- path (imports endpoint) always sets it; manual-claim entry arrives in
 -- a later iteration.
+--
+-- import_id cascades ON DELETE (unlike every other FK in this file, which
+-- defaults to NO ACTION -- see the note on `orgs` above): deleting a
+-- failed import should take its parsed lines with it. SET NULL was
+-- rejected because null import_id already has a distinct, documented
+-- meaning (manual claim) -- silently reclassifying bank-derived lines as
+-- manual claims on import deletion would be wrong.
 -- ---------------------------------------------------------------------------
 create table public.transactions (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
-  import_id uuid references public.imports (id),
+  import_id uuid references public.imports (id) on delete cascade,
   entity_id uuid not null references public.entities (id),
   property_id uuid references public.properties (id),
   date date not null,
@@ -437,6 +452,9 @@ create table public.mtd_quarters (
   replacement_domestic_items_total numeric(12, 2) not null default 0,
   use_of_home_allowance_total numeric(12, 2) not null default 0,
   capital_expense_total numeric(12, 2) not null default 0,
+  -- Free-form until Task 16 pins the export lifecycle; deliberately not an
+  -- enum yet -- the one status column in this file where the closed set
+  -- isn't known.
   export_status text,
   generated_document_id uuid references public.documents (id),
   generated_at timestamptz not null default now(),
@@ -447,7 +465,8 @@ create table public.mtd_quarters (
 );
 
 create index idx_mtd_quarters_org_id on public.mtd_quarters (org_id);
-create index idx_mtd_quarters_entity_id on public.mtd_quarters (entity_id);
+-- No idx_mtd_quarters_entity_id: entity_id is the leading column of
+-- uq_mtd_quarters_entity_taxyear_quarter_version, which already covers it.
 
 create trigger trg_mtd_quarters_set_updated_at
 before update on public.mtd_quarters
@@ -478,6 +497,11 @@ for each row execute function set_updated_at();
 -- ---------------------------------------------------------------------------
 -- audit_log -- append-only record of every state change to money or
 -- compliance data.
+--
+-- No `updated_at` / update trigger here (unlike every other table in this
+-- file): audit rows are append-only, no UPDATEs are ever expected against
+-- them, so `updated_at` would be dead weight -- `created_at` alone records
+-- when the event happened.
 -- ---------------------------------------------------------------------------
 create table public.audit_log (
   id uuid primary key default gen_random_uuid(),
@@ -487,12 +511,7 @@ create table public.audit_log (
   action text not null,
   before jsonb,
   after jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  created_at timestamptz not null default now()
 );
 
 create index idx_audit_log_org_id on public.audit_log (org_id);
-
-create trigger trg_audit_log_set_updated_at
-before update on public.audit_log
-for each row execute function set_updated_at();
