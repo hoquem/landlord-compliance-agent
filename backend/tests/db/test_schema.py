@@ -16,7 +16,8 @@ Run locally (from ``backend/``), with the Supabase local stack running
 
 import asyncpg
 import pytest
-from conftest import EXPECTED_TABLES, _database_url
+
+from tests.db.conftest import EXPECTED_TABLES, _database_url
 
 #: The exact 15 HMRC categories from the spec, in spec order. This is the
 #: value backend/src/core/categories.py's HmrcCategory StrEnum (Task 7)

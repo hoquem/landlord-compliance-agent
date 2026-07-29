@@ -41,7 +41,8 @@ import uuid
 import asyncpg
 import httpx
 import pytest
-from conftest import (
+
+from tests.db.conftest import (
     EXPECTED_TABLES,
     _anon_key,
     _database_url,

@@ -15,13 +15,13 @@ from decimal import Decimal
 
 import asyncpg
 import pytest
-from conftest import _database_url
 from sqlalchemy import select
 
 import src.db.session as session_module
 from src.core.categories import HmrcCategory
 from src.db.models import Entity, Org, Property, PropertyOwnership, Transaction
 from src.db.session import async_session_factory
+from tests.db.conftest import _database_url
 
 
 def test_hmrc_category_enum_column_matches_python_source_of_truth() -> None:
