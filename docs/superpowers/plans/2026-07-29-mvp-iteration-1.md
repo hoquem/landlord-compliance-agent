@@ -272,8 +272,14 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 - Create: `backend/src/api/auth.py`
 - Test: `backend/tests/api/test_auth.py`
 
-- [ ] **Step 1:** Failing tests: request without bearer → 401; with valid Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) → dependency yields `(user_id, org_id)`; JWT for user with no org row → 403 (loud, not silent org-less access).
-- [ ] **Step 2:** Implement, PASS, commit.
+- [x] **Step 1:** Failing tests: request without bearer → 401; with valid Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) → dependency yields `(user_id, org_id)`; JWT for user with no org row → 403 (loud, not silent org-less access).
+- [x] **Step 2:** Implement, PASS, commit.
+
+**COMPLETE** (`3ea7cd6` + `55e619e` + `1b2db15`). 17 api tests, 141 suite-wide, ruff clean. Both review stages passed; a fix round pinned three security guards that had been correct but untested (the HS256 allowlist, the `exp` requirement, and the upstream `verify_sub` assumption that `except ValueError` leans on). Each new test verified to die under its target mutation and no other.
+
+**What this task does NOT give you:** a correct `org_id`, and nothing more. It cannot pin that routes actually *filter* on it — see Phase 5 constraint #1. Do not read "auth is done" as "tenant isolation is proven".
+
+**Residual risk to remember:** `pyjwt>=2.13.0` is a floor, and a future 3.x could flip the `verify_sub` default that `auth.py`'s narrowed `except ValueError` depends on. `test_token_with_non_string_subject_is_401` is the tripwire; if it ever fails after a dependency bump, widen the except rather than deleting the test.
 
 ### Task 13a: Test-package migration (PREREQUISITE — do before Task 13b, its own commit)
 
