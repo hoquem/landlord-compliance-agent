@@ -46,7 +46,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, null, select
 
 from src.api.auth import CurrentAuth
@@ -65,6 +65,9 @@ FinanceCostClassification = Literal["residential", "non_residential"]
 
 #: What an ownership set has to add up to, exactly.
 _WHOLE = Decimal(100)
+
+#: The precision of ``property_ownership.ownership_percentage numeric(5,2)``.
+_TWO_PLACES = Decimal("0.01")
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +223,24 @@ class OwnershipShare(_StrictBody):
 
     entity_id: uuid.UUID
     percentage: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)
+
+    @field_validator("percentage")
+    @classmethod
+    def _at_column_precision(cls, value: Decimal) -> Decimal:
+        """Normalise a validated percentage to the column's two decimal places.
+
+        ``100``, ``100.0`` and ``100.00`` are one share, but
+        :class:`~decimal.Decimal` remembers which was typed -- so without
+        this the API would echo back ``"100"`` next to a sibling's
+        ``"40.00"``, and an audit payload built pre-flush would read as a
+        change against a ``before`` that came from the database at 2dp. Runs
+        after the field constraints above, so a third decimal place is
+        already a 422 and nothing is ever rounded here.
+
+        :param value: the validated percentage.
+        :returns: the same number at 2dp.
+        """
+        return value.quantize(_TWO_PLACES)
 
 
 class OwnershipRead(BaseModel):

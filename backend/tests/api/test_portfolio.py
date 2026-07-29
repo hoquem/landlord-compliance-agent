@@ -487,7 +487,14 @@ async def test_put_ownership_writes_the_whole_set(org_user: OrgUser) -> None:
 
 
 async def test_put_ownership_accepts_a_sole_owner_at_100(org_user: OrgUser) -> None:
-    """The common case: one entity owning the whole property."""
+    """The common case: one entity owning the whole property, sent as a bare ``100``.
+
+    Also pins the rendering: a percentage comes back at the column's two
+    decimal places whichever of ``100``, ``100.0`` or ``"100.00"`` was sent,
+    so a client never sees ``"100"`` beside a sibling's ``"40.00"`` and an
+    audit ``after`` payload is comparable with a ``before`` read from the
+    database.
+    """
     prop = await create_property(org_user)
     entity = await create_entity(org_user)
 
@@ -498,7 +505,11 @@ async def test_put_ownership_accepts_a_sole_owner_at_100(org_user: OrgUser) -> N
         [{"entity_id": entity["id"], "percentage": 100}],
     )
     assert resp.status_code == 200, resp.text
-    assert [Decimal(share["percentage"]) for share in resp.json()] == [Decimal(100)]
+    assert [share["percentage"] for share in resp.json()] == ["100.00"]
+    assert [row["ownership_percentage"] for row in await ownership_rows(prop["id"])] == [
+        Decimal("100.00")
+    ]
+    assert '"percentage": "100.00"' in (await audit_rows(org_user.org_id))[-1]["after"]
 
 
 async def test_put_ownership_sums_json_numbers_exactly(org_user: OrgUser) -> None:
