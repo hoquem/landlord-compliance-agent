@@ -275,6 +275,17 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 - [ ] **Step 1:** Failing tests: request without bearer → 401; with valid Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) → dependency yields `(user_id, org_id)`; JWT for user with no org row → 403 (loud, not silent org-less access).
 - [ ] **Step 2:** Implement, PASS, commit.
 
+### Task 13a: Test-package migration (PREREQUISITE — do before Task 13b, its own commit)
+
+Tasks 13b–17 are all api test modules needing the same ~90 lines of fixtures (`org_user`, `mint_token`, `_env`, `call_whoami`, `_dispose_app_engine`). They cannot share them until the bare-name conftest imports are fixed (Phase 5 constraint #2 above). Do this once, here, rather than five times.
+
+- [ ] **Step 1:** `touch tests/__init__.py` and the same in all six subdirs (`api`, `core`, `db`, `evals`, `flows`, plus `fixtures` if it holds Python).
+- [ ] **Step 2 (mandatory — Step 1 alone breaks the suite):** rewrite the bare-name imports in **all three** db test files package-qualified — `tests/db/test_schema.py`, `tests/db/test_rls.py`, `tests/db/test_models_roundtrip.py`. With `__init__.py` present and these left alone you get `ModuleNotFoundError: No module named 'conftest'`. Expect ruff `I001` on the new first-party import placement.
+- [ ] **Step 3:** move Task 13's api fixtures out of `tests/api/test_auth.py` into a new `tests/api/conftest.py`, including `_dispose_app_engine`. Update `test_auth.py`'s module docstring, which currently explains why the fixtures live inline — that reason is now gone.
+- [ ] **Step 4:** verify all three invocations: full `pytest` (137 + Task 13's new tests), `pytest tests/db tests/api`, AND `pytest tests/api tests/db`. Both directory orderings must pass — that ordering asymmetry is the whole bug. `ruff check` clean. Commit.
+
+**Rejected alternatives, so nobody re-litigates them:** (a) a root `tests/conftest.py` holding the fixtures — it loads under the same `conftest` module name and so sits in the exact collision channel this step exists to close, and it was never verified; (b) `asyncio_default_test_loop_scope = "session"` in `pyproject.toml` to delete `_dispose_app_engine` — verified working by the Task 13 quality review, but it trades per-test event-loop isolation across all 137 tests for the removal of 12 lines, and the fixture is already proven correct. Note pytest-asyncio will eventually make the unset `asyncio_default_fixture_loop_scope` default an error, which will force a revisit of (b) on its own schedule.
+
 ### Task 13b: Portfolio setup — entities, properties, ownership (foundational reference data)
 
 Without this the delivered MVP cannot be used: every later task assumes orgs/entities/properties exist.
