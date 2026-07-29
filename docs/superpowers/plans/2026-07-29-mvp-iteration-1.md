@@ -244,7 +244,7 @@ class StatementProposals(BaseModel):
 ```
 
 Failing test: `StatementProposals` rejects out-of-range confidence and unknown category (Pydantic validation is the contract the LLM is retried against).
-- [ ] **Step 2:** Implement `CategoriseStatementFlow` (CrewAI `Flow` with typed state): input = parsed lines + org property list + up to 50 most recent confirmed transactions (few-shot); one step calls `Agent.kickoff(prompt, response_format=StatementProposals)`. Agent config in `src/flows/crews/config/` YAML per CrewAI convention: role "UK landlord bookkeeping specialist", explicit instruction that uncertain lines get low confidence and `PERSONAL_NON_BUSINESS` is for non-business lines, never a guess. LLM: `anthropic/claude-sonnet-5` (cost-effective for classification; model id in config, not code — verify the exact CrewAI/LiteLLM model string at implementation time against the claude-api skill/docs).
+- [ ] **Step 2:** Implement `CategoriseStatementFlow` (CrewAI `Flow` with typed state): input = parsed lines + org property list + up to 50 most recent confirmed transactions (few-shot); one step calls `Agent.kickoff(prompt, response_format=StatementProposals)`. Agent config in `src/flows/crews/config/` YAML per CrewAI convention: role "UK landlord bookkeeping specialist", explicit instruction that uncertain lines get low confidence and `PERSONAL_NON_BUSINESS` is for non-business lines, never a guess. **LLM (decision 2026-07-29): fully env-driven — `CATEGORISER_MODEL` env var (LiteLLM id, e.g. `ollama/glm-4.5-air` or a hosted model) + optional `OLLAMA_BASE_URL`; add both to `.env.example`, `ANTHROPIC_API_KEY` becomes optional.** Mahmud intends a local open-weight model via Ollama (Kimi/GLM-class) for bank-data privacy; the flow must not hard-code any provider. Fail loudly at flow start if `CATEGORISER_MODEL` is unset. Verify the exact LiteLLM model string against whichever provider is configured at implementation time.
 - [ ] **Step 3:** Unit test with mocked `Agent.kickoff` returning a fixture `StatementProposals`: flow maps proposals onto line indices, errors if the LLM returns indices out of range (loud). → PASS, commit.
 
 ### Task 12: Golden-set eval harness
@@ -253,7 +253,7 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 - Create: `backend/evals/golden_set.jsonl` (seed with 20 synthetic labelled lines until Mahmud's real confirmed data exists), `backend/evals/run_eval.py`
 - Test: `backend/tests/evals/test_eval_harness.py`
 
-- [ ] **Step 1:** `run_eval.py`: runs the real flow against the golden set, prints per-category precision/recall + overall accuracy, exits non-zero below threshold (start 0.7; raise as the set grows). Harness unit-tested with a stubbed flow; the live eval is run manually/CI-nightly (`uv run python evals/run_eval.py`), not in the default test suite.
+- [ ] **Step 1:** `run_eval.py`: runs the real flow against the golden set, prints per-category precision/recall + overall accuracy, exits non-zero below threshold (start 0.7; raise as the set grows). **Accepts `--model <litellm-id>` (default: `CATEGORISER_MODEL` env) so the harness doubles as a model-selection tool — head-to-head runs of local Ollama candidates (GLM-class) vs hosted models on the same golden set decide the production model empirically.** Harness unit-tested with a stubbed flow; the live eval is run manually/CI-nightly (`uv run python evals/run_eval.py`), not in the default test suite.
 - [ ] **Step 2:** Commit `feat: categorisation golden-set eval harness`.
 
 ---
