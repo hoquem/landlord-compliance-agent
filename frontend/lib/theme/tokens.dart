@@ -75,12 +75,18 @@ abstract final class Motion {
 
   /// Resolves [duration] against the current reduced-motion preference.
   ///
-  /// Returns [Duration.zero] when `MediaQuery.of(context).disableAnimations`
+  /// Returns [Duration.zero] when `MediaQuery.disableAnimationsOf(context)`
   /// is true, so callers never need to check that flag themselves. Defaults
   /// to [standard] when no duration is supplied. Use this wherever a widget
   /// picks a duration for an [AnimationController], implicit animation, or
   /// `flutter_animate` effect.
+  ///
+  /// Uses the aspect-scoped `MediaQuery.disableAnimationsOf` rather than
+  /// `MediaQuery.of(context).disableAnimations` so callers only rebuild when
+  /// that specific flag changes, not on every MediaQuery change (window
+  /// resize, keyboard inset, text-scale) — important on web where resize
+  /// events are frequent.
   static Duration of(BuildContext context, [Duration duration = standard]) {
-    return MediaQuery.of(context).disableAnimations ? Duration.zero : duration;
+    return MediaQuery.disableAnimationsOf(context) ? Duration.zero : duration;
   }
 }

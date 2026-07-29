@@ -38,8 +38,26 @@ void main() {
     });
 
     test('themes derive their ColorScheme from the shared seed colour', () {
+      final ColorScheme expectedLight = ColorScheme.fromSeed(
+        seedColor: kSeedColor,
+        brightness: Brightness.light,
+      );
+      final ColorScheme expectedDark = ColorScheme.fromSeed(
+        seedColor: kSeedColor,
+        brightness: Brightness.dark,
+      );
+
       expect(AppTheme.light().colorScheme.brightness, Brightness.light);
+      expect(AppTheme.light().colorScheme.primary, expectedLight.primary);
       expect(AppTheme.dark().colorScheme.brightness, Brightness.dark);
+      expect(AppTheme.dark().colorScheme.primary, expectedDark.primary);
+    });
+
+    test('card theme uses the token radius, not a default shape', () {
+      expect(
+        AppTheme.light().cardTheme.shape,
+        const RoundedRectangleBorder(borderRadius: Radii.mdRadius),
+      );
     });
   });
 
