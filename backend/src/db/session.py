@@ -31,6 +31,13 @@ def _database_url() -> str:
     )
 
 
+# Created at module import time (also means importing this module without
+# DATABASE_URL set fails loudly at import). Under pytest this assumes an
+# event-loop-per-test setup (pytest-asyncio auto mode) that matches the
+# engine's pooled connections; if cross-event-loop errors ("Event loop is
+# closed", cross-loop Future) ever appear in tests, give tests their own
+# NullPool engine or an `await engine.dispose()` fixture -- don't reshape
+# this app-level engine around the test harness.
 engine: AsyncEngine = create_async_engine(_database_url())
 
 #: Session factory for request/worker/test code. ``expire_on_commit=False``
