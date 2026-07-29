@@ -307,6 +307,14 @@ def test_cumulative_totals_only_capital_expense_survives_from_excluded_set() -> 
             assert category not in result
 
 
+def test_cumulative_totals_out_of_range_tax_year_raises() -> None:
+    txns = [
+        _txn(date(1999, 4, 10), "100.00", HmrcCategory.RENT_INCOME),
+    ]
+    with pytest.raises(ValueError, match="1999"):
+        cumulative_totals(txns, ENTITY_A, 1999, 1, ownerships=SOLE_OWNERSHIP)
+
+
 def test_cumulative_totals_missing_ownership_map_raises() -> None:
     txns = [
         _txn(date(2026, 4, 10), "100.00", HmrcCategory.RENT_INCOME),

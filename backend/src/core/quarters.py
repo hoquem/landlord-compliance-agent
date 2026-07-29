@@ -98,6 +98,28 @@ def _quarter_end_date(tax_year_start: int, quarter: int) -> date:
     return ends[quarter]
 
 
+def _validate_start_year(start_year: int) -> None:
+    """Validate a tax-year start year, shared by every function keyed on one.
+
+    :param start_year: calendar year the tax year starts in (6 April).
+    :raises ValueError: if ``start_year`` is outside 2020-2100. MTD ITSA
+        did not exist before then, so earlier "tax years" are meaningless
+        in this system; beyond 2100 :func:`format_tax_year`'s two-digit
+        end-year suffix starts colliding with the *next* century's tax
+        years (e.g. a hypothetical 2199-00 would be visually
+        indistinguishable from 2099-00), so the format itself becomes
+        ambiguous rather than merely unused. Enforced here too (not just
+        in ``format_tax_year``) so an out-of-range year used only for date
+        arithmetic -- e.g. in :func:`cumulative_totals` -- fails at the
+        point of use instead of surfacing later as a confusing string.
+    """
+    if start_year < _MIN_TAX_YEAR_START or start_year > _MAX_TAX_YEAR_START:
+        raise ValueError(
+            f"tax year start {start_year} outside supported range "
+            f"{_MIN_TAX_YEAR_START}-{_MAX_TAX_YEAR_START}"
+        )
+
+
 def format_tax_year(start_year: int) -> str:
     """Format a tax year as HMRC/DB notation, e.g. ``"2026-27"``.
 
@@ -107,18 +129,9 @@ def format_tax_year(start_year: int) -> str:
     :param start_year: calendar year the tax year starts in (6 April).
     :returns: ``"{start_year}-{end_year mod 100, zero-padded}"``, e.g.
         ``format_tax_year(2099) == "2099-00"``.
-    :raises ValueError: if ``start_year`` is outside 2020-2100. MTD ITSA
-        did not exist before then, so earlier "tax years" are meaningless
-        in this system; beyond 2100 the two-digit end-year suffix starts
-        colliding with the *next* century's tax years (e.g. a hypothetical
-        2199-00 would be visually indistinguishable from 2099-00), so the
-        format itself becomes ambiguous rather than merely unused.
+    :raises ValueError: see :func:`_validate_start_year`.
     """
-    if start_year < _MIN_TAX_YEAR_START or start_year > _MAX_TAX_YEAR_START:
-        raise ValueError(
-            f"tax year start {start_year} outside supported range "
-            f"{_MIN_TAX_YEAR_START}-{_MAX_TAX_YEAR_START}"
-        )
+    _validate_start_year(start_year)
     end_suffix = (start_year + 1) % 100
     return f"{start_year}-{end_suffix:02d}"
 
@@ -151,12 +164,19 @@ class TxnForTotals:
 
     :ivar date: transaction date.
     :ivar amount: penny-exact amount attributed to the whole transaction
-        (pre-ownership-split). Unsigned magnitude -- sign is implied by
-        ``hmrc_category`` (income vs. expense), matching the ``not null
-        default 0`` unsigned ``*_total`` columns on ``mtd_quarters`` and
-        HMRC's quarterly-update figures. The one exception: a refund or
-        reversal within an expense category is passed as negative, since
-        that is the only way to net it against the category total.
+        (pre-ownership-split). Sign convention (enforced in application
+        code only -- the ``mtd_quarters.*_total`` columns carry no DB
+        CHECK on sign) is derived, not copied straight from a
+        ``transactions`` row's ``amount``/``direction`` pair:
+        ``amount`` here is positive iff
+        ``(hmrc_category in INCOME_CATEGORIES) == (direction == "in")``.
+        Concretely: rent received (income category, direction ``in``) is
+        positive; a tenant refund (income category, direction ``out``) is
+        negative; a repair paid (expense category, direction ``out``) is
+        positive; a contractor refund (expense category, direction
+        ``in``) is negative. Callers building a :class:`TxnForTotals` from
+        a DB ``transactions`` row MUST apply this rule -- the row only
+        carries magnitude + direction, never a pre-signed amount.
     :ivar hmrc_category: the classified HMRC category.
     :ivar entity_id: ``transactions.entity_id`` -- the bank-account owner
         (provenance), used directly only when ``property_id`` is null.
@@ -212,7 +232,9 @@ def cumulative_totals(
         transaction in the window are simply absent (not zero-valued).
     :raises KeyError: if a transaction's ``property_id`` has no entry in
         ``ownerships``.
+    :raises ValueError: see :func:`_validate_start_year`.
     """
+    _validate_start_year(tax_year)
     window_start = date(tax_year, 4, 6)
     window_end = _quarter_end_date(tax_year, quarter)
 
