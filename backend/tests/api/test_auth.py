@@ -22,10 +22,12 @@ passes with an api-level conftest present. The hazard is narrower and
 order-dependent: ``tests/db/test_schema.py``, ``tests/db/test_rls.py`` and
 ``tests/db/test_models_roundtrip.py`` import their fixtures by *bare* module
 name (``from conftest import ...``), so ``sys.modules["conftest"]`` holds
-whichever loaded last -- measured, ``pytest tests/db tests/api`` gives 3
-collection errors, while ``pytest tests/api tests/db`` and plain ``pytest``
-both pass. Extract a shared conftest only together with making those three
-imports package-qualified, and only once a second ``tests/api`` module
+whichever loaded last. Measured *with an api-level conftest added*:
+``pytest tests/db tests/api`` gives 3 collection errors, while the reverse
+order and plain ``pytest`` both pass. (Without one there is nothing to
+shadow, so all three orders pass today -- don't read the first command as a
+standing failure.) Extract a shared conftest only together with making those
+three imports package-qualified, and only once a second ``tests/api`` module
 actually needs it.
 """
 
@@ -48,7 +50,7 @@ from src.api.auth import AuthContext, CurrentAuth, require_auth
 from src.db.session import engine
 
 # ---------------------------------------------------------------------------
-# Environment (loud reads -- no defaults, no skips).
+# Environment and direct DB access (loud reads -- no defaults, no skips).
 # ---------------------------------------------------------------------------
 _RUN_HINT = (
     "Start the local Supabase stack (`supabase start` from the repo root) and run "
