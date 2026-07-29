@@ -225,11 +225,12 @@ create policy orgs_tenant_isolation on public.orgs
   using (id = (select public.current_org_id()))
   with check (id = (select public.current_org_id()));
 
--- Narrowed to select-only by the "Adversarial spec review fixes" block at
--- the end of this file -- granted here in full first so the per-table
--- pattern stays uniform to read, then revoked back down there with the
--- reasoning attached.
-grant select, insert, update, delete on public.orgs to authenticated;
+-- select only, per the "Adversarial spec review fixes" self-review of this
+-- migration: nothing in the design lets a signed-in client rename or
+-- delete their own org, or insert a new one, directly via PostgREST --
+-- org creation/management is service-side only (Task 13b's seed script /
+-- a future admin endpoint).
+grant select on public.orgs to authenticated;
 
 -- users
 alter table public.users enable row level security;
@@ -239,10 +240,28 @@ create policy users_tenant_isolation on public.users
   using (org_id = (select public.current_org_id()))
   with check (org_id = (select public.current_org_id()));
 
--- Narrowed to select-only by the "Adversarial spec review fixes" block at
--- the end of this file -- see there for why (org membership management
--- must never be a direct PostgREST write from a signed-in client).
-grant select, insert, update, delete on public.users to authenticated;
+-- select only, per the "Adversarial spec review fixes" self-review of this
+-- migration: with a full grant, an authenticated org member could DELETE
+-- an org-mate's public.users row (a lockout, with no in-app recovery
+-- path), or INSERT an arbitrary existing auth.uid() into their own org
+-- (`with check (org_id = current_org_id())` only constrains which org the
+-- new row claims -- it says nothing about whose auth.users id it claims,
+-- so any id already present in auth.users, including another org's real
+-- user, satisfies it). Org membership management is service-side only
+-- (Task 13b's seed script / a future admin endpoint), never a direct
+-- PostgREST write from a signed-in client.
+--
+-- Note on why UPDATE is withheld too, not just INSERT/DELETE: today,
+-- walking org_id to a different org via UPDATE already can't succeed --
+-- but only incidentally. current_org_id() is `stable`, so within one
+-- UPDATE's execution it's evaluated once as an InitPlan against the
+-- pre-update snapshot, and `with check` then compares the attempted new
+-- org_id against that pre-update value, which blocks the change as a side
+-- effect of STABLE caching semantics -- not a designed guarantee. A future
+-- change to the function's volatility, or a Postgres planner change,
+-- could silently reopen it. Granting only select removes the dependency
+-- on that incidental behaviour entirely.
+grant select on public.users to authenticated;
 
 -- entities
 alter table public.entities enable row level security;
@@ -376,36 +395,17 @@ grant select, insert on public.audit_log to authenticated;
 -- CRUD on org-scoped resource tables (properties, etc.). A follow-up
 -- adversarial review walked 15 attack paths against this migration and
 -- found four more still open. None of them defeat tenant isolation on a
--- resource table, but each is a privilege nothing in the design needs, so
--- each is revoked outright rather than left as an unused footgun.
--- ---------------------------------------------------------------------------
-
--- 1. users: with the full grant above, an authenticated org member could
--- DELETE an org-mate's public.users row (a lockout, with no in-app
--- recovery path), or INSERT an arbitrary existing auth.uid() into their
--- own org (`with check (org_id = current_org_id())` only constrains which
--- org the new row claims -- it says nothing about whose auth.users id it
--- claims, so any id already present in auth.users, including another
--- org's real user, satisfies it). Org membership management is
--- service-side only (Task 13b's seed script / a future admin endpoint),
--- never a direct PostgREST write from a signed-in client.
+-- resource table, but each is a privilege nothing in the design needs.
 --
--- Note on why this also removes UPDATE, not just INSERT/DELETE: today,
--- walking org_id to a different org via UPDATE already can't succeed --
--- but only incidentally. current_org_id() is `stable`, so within one
--- UPDATE's execution it's evaluated once as an InitPlan against the
--- pre-update snapshot, and `with check` then compares the attempted new
--- org_id against that pre-update value, which blocks the change as a side
--- effect of STABLE caching semantics -- not a designed guarantee. A future
--- change to the function's volatility, or a Postgres planner change,
--- could silently reopen it. Revoking the grant outright removes the
--- dependency on that incidental behaviour entirely.
-revoke insert, update, delete on public.users from authenticated;
-
--- 2. orgs: same reasoning -- select only. Nothing in the design lets a
--- signed-in client rename or delete their own org, or insert a new one,
--- directly via PostgREST.
-revoke insert, update, delete on public.orgs from authenticated;
+-- Items 1 (users) and 2 (orgs) from that review -- narrowing those two
+-- tables to select-only for `authenticated` -- are granted directly as
+-- `grant select` in each table's own section above, with the rationale
+-- folded in there, rather than as a grant-then-revoke pair down here: a
+-- reader sees the final privilege state for each table in one place. The
+-- remaining two findings (3 and 4) don't have a natural per-table section
+-- -- one is a function grant, the other a blanket revoke across every
+-- table -- so they stay here as revokes.
+-- ---------------------------------------------------------------------------
 
 -- 3. current_org_id(): security-definer functions get PUBLIC execute by
 -- default at creation time unless revoked, which -- combined with

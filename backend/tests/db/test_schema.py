@@ -14,27 +14,9 @@ Run locally (from ``backend/``), with the Supabase local stack running
     "Data model" section.
 """
 
-import os
-
 import asyncpg
 import pytest
-
-#: The 13 MVP tables from the spec's "Data model" > "Core (MVP)" list.
-EXPECTED_TABLES = {
-    "orgs",
-    "users",
-    "entities",
-    "properties",
-    "property_ownership",
-    "tenancies",
-    "imports",
-    "transactions",
-    "compliance_certificates",
-    "documents",
-    "mtd_quarters",
-    "job_queue",
-    "audit_log",
-}
+from conftest import EXPECTED_TABLES, _database_url
 
 #: The exact 15 HMRC categories from the spec, in spec order. This is the
 #: value backend/src/core/categories.py's HmrcCategory StrEnum (Task 7)
@@ -56,25 +38,6 @@ EXPECTED_HMRC_CATEGORIES = [
     "capital_expense",
     "personal_non_business",
 ]
-
-
-def _database_url() -> str:
-    """Read ``DATABASE_URL`` from the environment.
-
-    :raises RuntimeError: if unset. A schema guard test that silently
-        skips when it can't reach a database is a hole in the guard, not
-        a passing test -- fail loudly instead (house rule).
-    :returns: the connection string to use.
-    """
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL is not set. Start the local Supabase stack "
-            "(`supabase start` from the repo root) and run this test with "
-            "`uv run --env-file ../.env pytest tests/db/test_schema.py`, "
-            "or export DATABASE_URL yourself."
-        )
-    return url
 
 
 @pytest.mark.asyncio

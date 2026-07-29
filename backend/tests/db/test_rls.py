@@ -3,9 +3,15 @@
 Four layers:
 
 1. Catalog guards (mirror the style of ``test_schema.py``) confirming RLS
-   is enabled on every one of the 13 MVP tables, and that every table's
-   policy actually references ``current_org_id()`` in both its ``USING``
-   and ``WITH CHECK`` clauses -- not just that *a* policy exists.
+   is enabled on every one of the 13 MVP tables, that every table's policy
+   actually references ``current_org_id()`` in both its ``USING`` and
+   ``WITH CHECK`` clauses -- not just that *a* policy exists -- and (via
+   ``has_table_privilege``/``has_function_privilege``) that the exact
+   grant/revoke state from the "Adversarial spec review fixes" block in
+   0002_rls.sql holds: no TRUNCATE/REFERENCES/TRIGGER for ``anon`` or
+   ``authenticated`` on any table, ``current_org_id()`` executable only by
+   ``authenticated``, and ``users``/``orgs`` writable only via SELECT for
+   ``authenticated``.
 2. A composite-FK test proving the DB-level "belt and braces" constraint:
    a service-role write (which bypasses RLS entirely) still cannot stitch a
    ``property_ownership`` row across two different orgs.
@@ -30,98 +36,18 @@ Run locally (from ``backend/``), with the Supabase local stack running
 :seealso: docs/superpowers/plans/2026-07-29-mvp-iteration-1.md, Task 6.
 """
 
-import os
 import uuid
 
 import asyncpg
 import httpx
 import pytest
-
-#: The 13 MVP tables -- same set test_schema.py guards for existence; this
-#: file guards that every one of them also has RLS enabled with a policy.
-EXPECTED_TABLES = {
-    "orgs",
-    "users",
-    "entities",
-    "properties",
-    "property_ownership",
-    "tenancies",
-    "imports",
-    "transactions",
-    "compliance_certificates",
-    "documents",
-    "mtd_quarters",
-    "job_queue",
-    "audit_log",
-}
-
-
-def _database_url() -> str:
-    """Read ``DATABASE_URL`` from the environment.
-
-    :raises RuntimeError: if unset -- fail loudly rather than skip (house
-        rule; see ``test_schema.py`` for the identical rationale).
-    :returns: the connection string to use for a direct (service-role
-        equivalent) Postgres connection.
-    """
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL is not set. Start the local Supabase stack "
-            "(`supabase start` from the repo root) and run this test with "
-            "`uv run --env-file ../.env pytest tests/db/test_rls.py`, "
-            "or export DATABASE_URL yourself."
-        )
-    return url
-
-
-def _supabase_url() -> str:
-    """Read ``SUPABASE_URL`` from the environment.
-
-    :raises RuntimeError: if unset.
-    :returns: the base URL of the local Supabase API gateway (Auth +
-        PostgREST both hang off this).
-    """
-    url = os.environ.get("SUPABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "SUPABASE_URL is not set. Run this test with "
-            "`uv run --env-file ../.env pytest tests/db/test_rls.py`."
-        )
-    return url
-
-
-def _anon_key() -> str:
-    """Read ``SUPABASE_ANON_KEY`` from the environment.
-
-    :raises RuntimeError: if unset.
-    :returns: the anon API key used for every PostgREST/Auth request in
-        this file -- the real client-side key, paired with a real user JWT,
-        so the test exercises the exact path the Flutter frontend will use.
-    """
-    key = os.environ.get("SUPABASE_ANON_KEY")
-    if not key:
-        raise RuntimeError(
-            "SUPABASE_ANON_KEY is not set. Run this test with "
-            "`uv run --env-file ../.env pytest tests/db/test_rls.py`."
-        )
-    return key
-
-
-def _service_role_key() -> str:
-    """Read ``SUPABASE_SERVICE_ROLE_KEY`` from the environment.
-
-    :raises RuntimeError: if unset.
-    :returns: the service-role key, used only to call the Auth admin API
-        (create/delete users) -- never used against PostgREST in this file.
-    """
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    if not key:
-        raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is not set. Run this test with "
-            "`uv run --env-file ../.env pytest tests/db/test_rls.py`."
-        )
-    return key
+from conftest import (
+    EXPECTED_TABLES,
+    _anon_key,
+    _database_url,
+    _service_role_key,
+    _supabase_url,
+)
 
 
 @pytest.mark.asyncio
@@ -148,6 +74,13 @@ async def test_all_expected_tables_have_row_level_security_enabled() -> None:
     rls_by_table = {row["relname"]: row["relrowsecurity"] for row in rows}
     missing = EXPECTED_TABLES - rls_by_table.keys()
     assert not missing, f"Tables not found at all: {sorted(missing)}"
+
+    # A 0003+ migration that adds a table without updating EXPECTED_TABLES
+    # would otherwise sail through both guards above silently -- the new
+    # table simply never gets checked. Assert the catalog set is exactly
+    # EXPECTED_TABLES, not just a superset of it.
+    extra = rls_by_table.keys() - EXPECTED_TABLES
+    assert not extra, f"Unexpected tables in public schema not covered by this guard: {sorted(extra)}"
 
     not_enabled = {t for t in EXPECTED_TABLES if not rls_by_table[t]}
     assert not not_enabled, f"Tables without RLS enabled: {sorted(not_enabled)}"
@@ -178,6 +111,12 @@ async def test_all_expected_tables_have_org_scoped_policies() -> None:
     missing = EXPECTED_TABLES - by_table.keys()
     assert not missing, f"Tables with zero policies: {sorted(missing)}"
 
+    # Same reasoning as the RLS-enabled guard above: without this, a 0003
+    # migration adding a table with its own (possibly non-org-scoped)
+    # policy but no EXPECTED_TABLES update would go unchecked.
+    extra = by_table.keys() - EXPECTED_TABLES
+    assert not extra, f"Unexpected tables with policies not covered by this guard: {sorted(extra)}"
+
     not_org_scoped = {
         table
         for table in EXPECTED_TABLES
@@ -187,6 +126,89 @@ async def test_all_expected_tables_have_org_scoped_policies() -> None:
     assert not not_org_scoped, (
         "Tables whose policy doesn't reference current_org_id() in both "
         f"USING and WITH CHECK: {sorted(not_org_scoped)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_privilege_regression_pins() -> None:
+    """Pin the exact grant/revoke state 0002_rls.sql is supposed to produce.
+
+    Catalog-level check using ``has_table_privilege``/``has_function_privilege``
+    (Postgres's own privilege-resolution functions, not a re-parse of grant
+    text) so this fails the moment the *effective* privilege set drifts --
+    including the 0002 refactor that collapses the ``users``/``orgs``
+    grant-then-revoke pairs down to a single ``grant select`` at each
+    table's own section: this test pins the final privilege state that
+    refactor must preserve.
+
+    Three things pinned:
+
+    1. Neither ``anon`` nor ``authenticated`` has TRUNCATE, REFERENCES, or
+       TRIGGER on any of the 13 tables (adversarial-review item 4 --
+       TRUNCATE bypasses RLS entirely; REFERENCES/TRIGGER let a role alter
+       table structure).
+    2. ``current_org_id()`` is executable by ``authenticated`` but not by
+       ``anon`` (adversarial-review item 3).
+    3. ``authenticated`` can SELECT but cannot INSERT/UPDATE/DELETE
+       ``public.users`` or ``public.orgs`` (adversarial-review items 1-2 --
+       org membership management is service-side only).
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        privilege_rows = await conn.fetch(
+            """
+            select r.role, t.tbl, p.priv,
+                   has_table_privilege(r.role, format('public.%I', t.tbl), p.priv) as has_priv
+            from unnest($1::text[]) as t(tbl)
+            cross join unnest(array['anon', 'authenticated']) as r(role)
+            cross join unnest(array['TRUNCATE', 'REFERENCES', 'TRIGGER']) as p(priv)
+            """,
+            sorted(EXPECTED_TABLES),
+        )
+
+        anon_can_execute = await conn.fetchval(
+            "select has_function_privilege('anon', 'public.current_org_id()', 'execute')"
+        )
+        authenticated_can_execute = await conn.fetchval(
+            "select has_function_privilege('authenticated', 'public.current_org_id()', 'execute')"
+        )
+
+        users_orgs_rows = await conn.fetch(
+            """
+            select t.tbl, p.priv,
+                   has_table_privilege('authenticated', format('public.%I', t.tbl), p.priv) as has_priv
+            from unnest(array['users', 'orgs']) as t(tbl)
+            cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) as p(priv)
+            """
+        )
+    finally:
+        await conn.close()
+
+    leaked = [
+        f"{row['role']} has {row['priv']} on {row['tbl']} (should have been revoked)"
+        for row in privilege_rows
+        if row["has_priv"]
+    ]
+    assert not leaked, "TRUNCATE/REFERENCES/TRIGGER privilege regression:\n" + "\n".join(leaked)
+
+    assert anon_can_execute is False, (
+        "anon must not be able to execute public.current_org_id() -- it should have been "
+        "revoked from PUBLIC and never re-granted to anon"
+    )
+    assert authenticated_can_execute is True, (
+        "authenticated must be able to execute public.current_org_id() -- RLS policy "
+        "evaluation depends on it internally"
+    )
+
+    users_orgs_wrong = [
+        f"authenticated {'lacks' if row['priv'] == 'SELECT' else 'has'} {row['priv']} on {row['tbl']}"
+        for row in users_orgs_rows
+        if (row["priv"] == "SELECT" and not row["has_priv"])
+        or (row["priv"] != "SELECT" and row["has_priv"])
+    ]
+    assert not users_orgs_wrong, (
+        "authenticated must have SELECT but not INSERT/UPDATE/DELETE on users/orgs:\n"
+        + "\n".join(users_orgs_wrong)
     )
 
 
@@ -250,9 +272,13 @@ async def test_property_ownership_cross_org_fk_violation() -> None:
                     entity_id,
                 )
 
-                # Unreachable if the FK does its job -- included so a
-                # regression shows up as a normal assertion failure too,
-                # not just a missing exception.
+                # Unreachable if the FK does its job. If the FK regresses,
+                # the insert succeeds and this raise fires: it rolls the
+                # transaction back (leaving no test data behind) and,
+                # because it isn't a ForeignKeyViolationError,
+                # pytest.raises() lets it propagate -- surfacing as an
+                # unhandled-exception test ERROR, not a plain assertion
+                # failure. Nothing here actually asserts anything itself.
                 raise _RollbackTestTransaction
     finally:
         await conn.close()
@@ -424,11 +450,29 @@ async def cross_tenant_fixture():
     )
 
     # --- Cleanup (no try/except -- a failure here must fail the test loudly). ---
+    # Per-table sweep, keyed on org_id, over every org-scoped table --  not
+    # just properties -- in FK-safe dependency order (children before the
+    # parents they reference; see 0001_core.sql for the FK graph this
+    # mirrors). This is what lets a future test reuse this fixture and
+    # insert into any org-scoped table without silently breaking teardown
+    # the way a properties-only delete would.
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(
-            "delete from properties where org_id in ($1, $2)", org_a_id, org_b_id
-        )
+        for table in (
+            "transactions",
+            "property_ownership",
+            "tenancies",
+            "compliance_certificates",
+            "mtd_quarters",
+            "job_queue",
+            "audit_log",
+            "imports",
+            "documents",
+            "properties",
+            "entities",
+            "users",
+        ):
+            await conn.execute(f"delete from {table} where org_id in ($1, $2)", org_a_id, org_b_id)
     finally:
         await conn.close()
 
