@@ -1,0 +1,20 @@
+{"date": "2026-04-01", "description": "STANDING ORDER RENT - J SMITH", "amount": "950.00", "expected_category": "rent_income", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-01", "description": "FASTER PAYMENT RENT - A KHAN", "amount": "1100.00", "expected_category": "rent_income", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-03", "description": "B&Q LUTON 0442", "amount": "-84.99", "expected_category": "repairs_maintenance", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-05", "description": "SCREWFIX DIRECT", "amount": "-46.50", "expected_category": "repairs_maintenance", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-07", "description": "LUTON LETTINGS AGENCY MGMT FEE", "amount": "-95.00", "expected_category": "legal_professional", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-09", "description": "GAS SAFE ENGINEER - CP12 CERT", "amount": "-65.00", "expected_category": "other_allowable", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-10", "description": "AVIVA LANDLORD INSURANCE", "amount": "-38.20", "expected_category": "rates_insurance_ground", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-12", "description": "NATIONWIDE BTL MORTGAGE INTEREST", "amount": "-410.33", "expected_category": "finance_costs_residential", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-14", "description": "LUTON BOROUGH COUNCIL TAX", "amount": "-142.00", "expected_category": "rates_insurance_ground", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-15", "description": "AMAZON.CO.UK", "amount": "-23.99", "expected_category": "personal_non_business", "property_label": null, "_synthetic": true}
+{"date": "2026-04-18", "description": "IDEAL BOILERS - NEW COMBI INSTALL", "amount": "-1850.00", "expected_category": "capital_expense", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-20", "description": "REFUND - JT PLUMBING CONTRACTOR", "amount": "60.00", "expected_category": "other_property_income", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-21", "description": "CURRYS - WASHING MACHINE REPLACEMENT", "amount": "-289.00", "expected_category": "replacement_domestic_items", "property_label": "18 Sample Avenue, Luton", "_synthetic": true}
+{"date": "2026-04-22", "description": "SHELL FUEL - PROPERTY INSPECTION TRIP", "amount": "-42.10", "expected_category": "travel_vehicle", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-04-25", "description": "HOQUE & CO ACCOUNTANTS - ANNUAL FEE", "amount": "-350.00", "expected_category": "legal_professional", "property_label": null, "_synthetic": true}
+{"date": "2026-04-27", "description": "FLATHOLM COURT MANAGEMENT LTD SERVICE CHARGE", "amount": "-210.00", "expected_category": "service_costs", "property_label": "12 Flatholm Court, Luton", "_synthetic": true}
+{"date": "2026-04-28", "description": "FLATHOLM COURT FREEHOLDER GROUND RENT", "amount": "-50.00", "expected_category": "rates_insurance_ground", "property_label": "12 Flatholm Court, Luton", "_synthetic": true}
+{"date": "2026-04-29", "description": "USE OF HOME AS OFFICE ALLOWANCE - MONTHLY", "amount": "-26.00", "expected_category": "use_of_home_allowance", "property_label": null, "_synthetic": true}
+{"date": "2026-04-30", "description": "HEAD LEASE RENT - GROUND FLOOR UNIT", "amount": "-500.00", "expected_category": "rent_paid", "property_label": "142 Wardown Road, Luton", "_synthetic": true}
+{"date": "2026-05-01", "description": "SANTANDER COMMERCIAL LOAN INTEREST", "amount": "-215.75", "expected_category": "finance_costs_nonresidential", "property_label": "12 Flatholm Court, Luton", "_synthetic": true}
