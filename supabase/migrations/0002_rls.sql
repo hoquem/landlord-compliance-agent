@@ -225,6 +225,10 @@ create policy orgs_tenant_isolation on public.orgs
   using (id = (select public.current_org_id()))
   with check (id = (select public.current_org_id()));
 
+-- Narrowed to select-only by the "Adversarial spec review fixes" block at
+-- the end of this file -- granted here in full first so the per-table
+-- pattern stays uniform to read, then revoked back down there with the
+-- reasoning attached.
 grant select, insert, update, delete on public.orgs to authenticated;
 
 -- users
@@ -235,6 +239,9 @@ create policy users_tenant_isolation on public.users
   using (org_id = (select public.current_org_id()))
   with check (org_id = (select public.current_org_id()));
 
+-- Narrowed to select-only by the "Adversarial spec review fixes" block at
+-- the end of this file -- see there for why (org membership management
+-- must never be a direct PostgREST write from a signed-in client).
 grant select, insert, update, delete on public.users to authenticated;
 
 -- entities
@@ -361,3 +368,63 @@ create policy audit_log_tenant_isolation on public.audit_log
   with check (org_id = (select public.current_org_id()));
 
 grant select, insert on public.audit_log to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Adversarial spec review fixes (post-Task-6 self-review of this file).
+--
+-- The live cross-tenant PostgREST test proved isolation holds for ordinary
+-- CRUD on org-scoped resource tables (properties, etc.). A follow-up
+-- adversarial review walked 15 attack paths against this migration and
+-- found four more still open. None of them defeat tenant isolation on a
+-- resource table, but each is a privilege nothing in the design needs, so
+-- each is revoked outright rather than left as an unused footgun.
+-- ---------------------------------------------------------------------------
+
+-- 1. users: with the full grant above, an authenticated org member could
+-- DELETE an org-mate's public.users row (a lockout, with no in-app
+-- recovery path), or INSERT an arbitrary existing auth.uid() into their
+-- own org (`with check (org_id = current_org_id())` only constrains which
+-- org the new row claims -- it says nothing about whose auth.users id it
+-- claims, so any id already present in auth.users, including another
+-- org's real user, satisfies it). Org membership management is
+-- service-side only (Task 13b's seed script / a future admin endpoint),
+-- never a direct PostgREST write from a signed-in client.
+--
+-- Note on why this also removes UPDATE, not just INSERT/DELETE: today,
+-- walking org_id to a different org via UPDATE already can't succeed --
+-- but only incidentally. current_org_id() is `stable`, so within one
+-- UPDATE's execution it's evaluated once as an InitPlan against the
+-- pre-update snapshot, and `with check` then compares the attempted new
+-- org_id against that pre-update value, which blocks the change as a side
+-- effect of STABLE caching semantics -- not a designed guarantee. A future
+-- change to the function's volatility, or a Postgres planner change,
+-- could silently reopen it. Revoking the grant outright removes the
+-- dependency on that incidental behaviour entirely.
+revoke insert, update, delete on public.users from authenticated;
+
+-- 2. orgs: same reasoning -- select only. Nothing in the design lets a
+-- signed-in client rename or delete their own org, or insert a new one,
+-- directly via PostgREST.
+revoke insert, update, delete on public.orgs from authenticated;
+
+-- 3. current_org_id(): security-definer functions get PUBLIC execute by
+-- default at creation time unless revoked, which -- combined with
+-- PostgREST auto-exposing every function in an exposed schema as an RPC
+-- endpoint (`POST /rest/v1/rpc/current_org_id`) -- made it callable by
+-- the `anon` role with no bearer token at all. Only `authenticated`
+-- sessions need it (RLS policy evaluation invokes it internally); anon
+-- has no legitimate reason to call it directly.
+revoke execute on function public.current_org_id() from public;
+grant execute on function public.current_org_id() to authenticated;
+
+-- 4. TRUNCATE bypasses RLS entirely (it isn't DML, so no policy applies to
+-- it), and REFERENCES/TRIGGER let a role create constraints/triggers on a
+-- table it doesn't own -- none of which any app role needs. These three
+-- were granted to `anon` and `authenticated` on every table as part of
+-- this Supabase stack's baseline default privileges, predating this
+-- migration (see the earlier comment in this file: `\dp public.properties`
+-- showed `Dxtm` = TRUNCATE, REFERENCES, TRIGGER, MAINTAIN for both roles).
+-- MAINTAIN is deliberately left alone here -- unlike the other three, it
+-- doesn't bypass RLS or let a role alter table structure, so it's out of
+-- scope for this tenant-isolation pass.
+revoke truncate, references, trigger on all tables in schema public from anon, authenticated;
