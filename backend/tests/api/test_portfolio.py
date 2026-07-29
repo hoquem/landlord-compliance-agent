@@ -19,6 +19,11 @@ data is the explicit ``org_id`` filter in each statement, and a forgotten
 one is a silent cross-tenant leak. Hence
 ``test_org_a_cannot_*``/``..._is_404``: two orgs, two real tokens, asserted
 through the API rather than at the DB level.
+
+``scripts/seed_org.py``'s idempotency tests are in the final section of this
+module rather than a file of their own: the script drives the same app-level
+engine (so it needs this directory's autouse ``_dispose_app_engine``) and the
+same live stack, orgs and users, so it wants the same fixtures.
 """
 
 import uuid
@@ -28,9 +33,10 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from scripts.seed_org import seed_org
 from src.api.main import app
 from src.api.routers import portfolio
-from tests.api.conftest import OrgUser, db, mint_token
+from tests.api.conftest import AuthUser, OrgUser, db, mint_token
 
 # ---------------------------------------------------------------------------
 # Request helpers.
@@ -862,3 +868,107 @@ async def test_org_a_cannot_attach_org_bs_entity_to_its_own_property(make_org_us
     assert unknown_resp.text.replace(unknown, "X") == resp.text.replace(foreign["id"], "X"), (
         "a cross-org entity and a non-existent one must be reported identically"
     )
+
+
+# ---------------------------------------------------------------------------
+# scripts/seed_org.py -- see this module's docstring for why these live here.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+async def seeded_orgs():
+    """Track org names ``seed_org`` created during a test and purge them afterwards.
+
+    :yields: a list to append org names to.
+    """
+    names: list[str] = []
+    yield names
+
+    async with db() as conn:
+        for name in names:
+            org_ids = [
+                record["id"] for record in await conn.fetch("select id from orgs where name = $1", name)
+            ]
+            for org_id in org_ids:
+                await conn.execute("delete from users where org_id = $1", org_id)
+                await conn.execute("delete from orgs where id = $1", org_id)
+
+
+async def test_seed_org_creates_the_org_and_links_the_auth_user(
+    make_auth_user, seeded_orgs: list[str]
+) -> None:
+    """The first run creates the org and the ``public.users`` row pointing at it."""
+    user: AuthUser = await make_auth_user()
+    org_name = f"Seed test org {uuid.uuid4().hex}"
+    seeded_orgs.append(org_name)
+
+    result = await seed_org(email=user.email, org_name=org_name)
+
+    assert result.org_created is True
+    assert result.user_linked is True
+    assert result.user_id == user.user_id
+    async with db() as conn:
+        row = await conn.fetchrow(
+            "select org_id, email from users where id = $1", user.user_id
+        )
+    assert row["org_id"] == result.org_id
+    assert row["email"] == user.email
+
+
+async def test_seed_org_is_idempotent(make_auth_user, seeded_orgs: list[str]) -> None:
+    """A second run must change nothing and duplicate nothing."""
+    user: AuthUser = await make_auth_user()
+    org_name = f"Seed test org {uuid.uuid4().hex}"
+    seeded_orgs.append(org_name)
+
+    first = await seed_org(email=user.email, org_name=org_name)
+    second = await seed_org(email=user.email, org_name=org_name)
+
+    assert second.org_id == first.org_id
+    assert second.org_created is False
+    assert second.user_linked is False
+    async with db() as conn:
+        assert await conn.fetchval("select count(*) from orgs where name = $1", org_name) == 1
+        assert await conn.fetchval("select count(*) from users where id = $1", user.user_id) == 1
+
+
+async def test_seed_org_without_an_auth_user_fails_loudly(seeded_orgs: list[str]) -> None:
+    """No auth user for the email is a hard error naming it, not a silently created one.
+
+    Sign-up is out of scope (Task 19 builds sign-in only), so the auth user
+    has to exist first -- and the script says so rather than half-seeding.
+    """
+    org_name = f"Seed test org {uuid.uuid4().hex}"
+    seeded_orgs.append(org_name)
+    email = f"nobody-{uuid.uuid4().hex}@example.com"
+
+    with pytest.raises(RuntimeError, match=email):
+        await seed_org(email=email, org_name=org_name)
+
+    async with db() as conn:
+        assert await conn.fetchval("select count(*) from orgs where name = $1", org_name) == 0, (
+            "a failed seed must not leave an org behind"
+        )
+
+
+async def test_seed_org_refuses_to_move_a_user_between_orgs(
+    make_auth_user, seeded_orgs: list[str]
+) -> None:
+    """A user already in another org is a hard error, not a silent re-pointing.
+
+    Moving a user's ``org_id`` would move their whole view of the portfolio;
+    an idempotent setup script must not do that as a side effect of being
+    run with a different ``--org``.
+    """
+    user: AuthUser = await make_auth_user()
+    first_name = f"Seed test org {uuid.uuid4().hex}"
+    second_name = f"Seed test org {uuid.uuid4().hex}"
+    seeded_orgs.extend([first_name, second_name])
+
+    first = await seed_org(email=user.email, org_name=first_name)
+    with pytest.raises(RuntimeError, match=str(first.org_id)):
+        await seed_org(email=user.email, org_name=second_name)
+
+    async with db() as conn:
+        assert (
+            await conn.fetchval("select org_id from users where id = $1", user.user_id)
+            == first.org_id
+        )
