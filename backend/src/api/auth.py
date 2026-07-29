@@ -49,6 +49,11 @@ _AUDIENCE = "authenticated"
 #: Claims a token must carry to be usable at all: ``exp`` (a token with no
 #: expiry would be valid forever) and ``sub`` (the user it speaks for).
 #: ``aud`` is required implicitly by passing ``audience=`` to ``jwt.decode``.
+#:
+#: The ``sub`` entry does more than turn a subject-less token into a 401: it
+#: is the only thing that guarantees ``claims["sub"]`` in ``require_auth``
+#: exists. Drop it and a token without a subject becomes a ``KeyError`` --
+#: an unhandled 500 -- rather than a 401.
 _REQUIRED_CLAIMS = ["exp", "sub"]
 
 
@@ -83,9 +88,6 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 class AuthContext(NamedTuple):
     """The authenticated caller, as the ``(user_id, org_id)`` pair.
-
-    A :class:`~typing.NamedTuple` so callers can either unpack it
-    (``user_id, org_id = auth``) or read the fields by name.
 
     :ivar user_id: ``public.users.id``, i.e. the token's ``sub`` -- the
         Supabase Auth user id.
@@ -136,14 +138,21 @@ async def require_auth(
         )
     except jwt.InvalidTokenError as exc:
         # PyJWT's messages ("Signature has expired", "Invalid audience",
-        # ...) say which check failed without revealing anything secret,
-        # so pass them through rather than flattening every cause into one
-        # opaque error.
+        # ...) say which check failed without revealing anything secret, so
+        # pass them through.
         raise _unauthenticated(f"Invalid bearer token: {exc}") from exc
 
+    # ``_REQUIRED_CLAIMS`` guarantees ``sub`` is present, and PyJWT's
+    # ``verify_sub`` check (on by default in the pinned pyjwt) has already
+    # rejected a non-string ``sub`` as an ``InvalidSubjectError`` -- an
+    # ``InvalidTokenError``, so a 401 above. ``claims["sub"]`` is therefore a
+    # ``str``, whose only remaining failure mode here is being malformed:
+    # ``ValueError``. That upstream guarantee is pinned by
+    # ``test_token_with_non_string_subject_is_401``; without it a non-string
+    # ``sub`` would reach this line and 500.
     try:
         user_id = uuid.UUID(claims["sub"])
-    except (AttributeError, TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise _unauthenticated(f"Bearer token subject is not a UUID: {claims['sub']!r}") from exc
 
     async with async_session_factory() as session:
