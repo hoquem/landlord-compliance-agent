@@ -215,6 +215,7 @@ def test_unknown_format_fails_loudly() -> None:
 - Test: `backend/tests/core/test_quarters.py`
 
 - [ ] **Step 1:** Failing tests: `quarter_for(date(2026, 7, 5)) == (2026, 1)` and `quarter_for(date(2026, 7, 6)) == (2026, 2)` (UK tax-year quarters from 6 April); `cumulative_totals(confirmed_txns, entity_id, tax_year, quarter)` returns YTD per-category totals **from 6 April through quarter end**, ownership-weighted via `split_amount`, excluding `EXCLUDED_FROM_EXPORT` categories from allowable totals but reporting capital separately; Q2 totals ⊇ Q1 totals for same data (cumulative property test).
+- [ ] **Step 1a (from Task 5 review):** Failing tests for `format_tax_year(2026) == "2026-27"` (and century boundary `format_tax_year(2099) == "2099-00"`) — the single source of the DB's `mtd_quarters.tax_year` string format, which now carries a CHECK constraint (`^\d{4}-\d{2}$`).
 - [ ] **Step 1b:** Also failing tests: `next_update_deadline(date)` returns the next statutory quarterly-update deadline — 7 Aug, 7 Nov, 7 Feb, 7 May (the 7th of the month following quarter-end); pin all four boundaries. Transactions with `property_id` null (e.g. `use_of_home_allowance`, `travel_vehicle`) attribute 100% to `transactions.entity_id` — no ownership split applies (spec: entity_id determines whose ledger unallocated lines sit on).
 - [ ] **Step 2:** Implement; pure functions over passed-in data (no DB). → PASS, commit.
 
