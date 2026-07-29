@@ -12,6 +12,35 @@ until a second file actually needs it (see Task 13).
 
 import os
 
+import pytest
+
+from src.db.session import engine
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_app_engine():
+    """Drop the app engine's pooled connections after every test in ``tests/db``.
+
+    ``test_models_roundtrip.py`` uses the module-level ``src.db.session``
+    engine, whose pool outlives the per-test event loop pytest-asyncio's auto
+    mode creates -- so without this it leaves connections bound to a closed
+    loop and the next test to reach for that engine dies with ``RuntimeError:
+    Event loop is closed``. That next test is not necessarily in this
+    directory: it was reachable as ``pytest tests/db tests/api``, which only
+    appeared to pass because the first ``tests/api`` test collected happens to
+    401 before touching the database.
+
+    A no-op for ``test_schema.py``/``test_rls.py``, which use raw asyncpg and
+    never touch this engine. Mirrors ``tests/api/conftest.py``'s fixture of
+    the same name; two copies rather than one shared helper, because the
+    directory each one names is the useful part of the docstring.
+
+    Importing ``engine`` eagerly costs nothing here -- ``tests/db`` already
+    fails loudly at import without ``DATABASE_URL``.
+    """
+    yield
+    await engine.dispose()
+
 #: The 13 MVP tables from the spec's "Data model" > "Core (MVP)" list --
 #: also the set ``test_rls.py`` guards for RLS-enabled + org-scoped
 #: policies.
