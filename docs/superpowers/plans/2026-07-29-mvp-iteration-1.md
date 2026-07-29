@@ -260,6 +260,11 @@ Failing test: `StatementProposals` rejects out-of-range confidence and unknown c
 
 ## Phase 5 — API
 
+**Two constraints established by Task 13 that every router task below inherits:**
+
+1. **RLS does not protect API paths — filter `org_id` by hand, always.** `src/db/session.py` builds its engine from `DATABASE_URL`, which is the `postgres` superuser; that role **bypasses row-level security**, so Task 6's policies are inert on anything the API does. `require_auth`'s 403 plus explicit `WHERE org_id = auth.org_id` filtering in every query IS the entire tenant boundary here. A forgotten filter is a silent cross-org data leak that no test in `tests/db/test_rls.py` will catch, because that suite exercises PostgREST with real user JWTs, not this connection. Every router task must include a test proving org A cannot reach org B's rows *through the API*.
+2. **Do NOT add `backend/tests/api/conftest.py` without first adding `__init__.py` files under `tests/`.** There are none today, so pytest imports every `conftest.py` under the same top-level module name `conftest`; an api-level one shadows `tests/db/conftest.py` and breaks that suite's `from conftest import EXPECTED_TABLES, _database_url` with a confusing `ImportError`. Task 13 kept its fixtures inside `test_auth.py` for this reason. The first task that genuinely needs shared api fixtures should add the `__init__.py` files as an explicit step and re-run the *whole* suite.
+
 ### Task 13: Auth dependency
 
 **Files:**
