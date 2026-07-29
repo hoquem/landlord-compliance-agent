@@ -287,6 +287,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Create: `backend/src/api/routers/imports.py`
 - Test: `backend/tests/api/test_imports.py`
 
+- [ ] **Step 0 (from Task 6 review — spec §Security "storage buckets namespaced per org"):** creating the statements bucket requires `storage.objects` RLS policies enforcing the `{org_id}/` path prefix (the `documents` table cannot enforce path isolation — `storage_path` is free text). Add policies restricting authenticated access to paths starting with their org id; service connection used by the API bypasses. Test: authenticated user cannot read an object under another org's prefix.
 - [ ] **Step 1:** Failing tests: `POST /imports` (multipart CSV + entity_id) stores file to Supabase Storage (`statements/{org_id}/...`), parses; on success creates `imports` row (status `parsed`) + `transactions` rows (status `unclassified`) + `job_queue` row (`type=categorise`); on `StatementParseError` creates `imports` row status `failed` with row-level error detail in response and DB — and NO transaction rows; `GET /imports` lists with status.
 - [ ] **Step 2:** Implement (repository layer in `src/db/`), PASS, commit.
 
