@@ -344,7 +344,7 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 ### Task 19: Auth + app shell
 
 - Files: `frontend/lib/features/auth/`, `frontend/lib/app.dart`, `frontend/lib/main.dart`
-- [ ] Supabase email/password sign-in; `go_router` guarded routes; app shell with nav rail (Dashboard, Imports, Review, Certificates); widget test: unauthenticated → login screen. Commit.
+- [ ] **(Auth decision 2026-07-29: Google OAuth only — no email/password UI.)** Login screen is a single "Continue with Google" button calling `supabase.auth.signInWithOAuth(OAuthProvider.google)`; `[auth.external.google]` enabled in `supabase/config.toml` reading `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` from env (add to `.env.example`). **Input needed from Mahmud: Google Cloud OAuth client credentials** (redirect URI `http://127.0.0.1:54321/auth/v1/callback` for local). `go_router` guarded routes; app shell with nav rail (Dashboard, Imports, Review, Certificates); widget tests: unauthenticated → login screen shows the Google button (OAuth flow itself mocked — no live Google in tests). RLS-test plumbing keeps service-side password-grant users; that's internal only. Commit.
 
 ### Task 20: Upload & imports screen
 

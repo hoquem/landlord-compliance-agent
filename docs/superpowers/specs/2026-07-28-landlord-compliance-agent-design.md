@@ -108,6 +108,8 @@ Fail loudly and early throughout (house rule):
 
 ## Security & multi-tenancy
 
+**Sign-in method (decision 2026-07-29):** Google OAuth only, via Supabase Auth (`signInWithOAuth`, google provider). No email/password UI. Requires a Google Cloud OAuth client (ID + secret) configured in `supabase/config.toml` `[auth.external.google]` — input needed from Mahmud at Task 19. The email provider stays enabled internally for service-side test plumbing (auth-admin-created users in RLS tests) — it is never exposed in the app UI. When the iOS app ships, App Store rules require adding Apple sign-in alongside Google (tracked, out of MVP scope).
+
 Supabase RLS on `org_id` for every table; storage buckets namespaced per org; API validates Supabase JWT and scopes all queries; agent flows receive only the calling org's data. Bank statements are sensitive — no statement content in logs; agent prompts include only what categorisation needs.
 
 ## Rollout
