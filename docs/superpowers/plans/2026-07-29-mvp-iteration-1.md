@@ -114,6 +114,7 @@ Run: `uv run pytest tests/test_health.py -v` → Expected: FAIL (no `src.api.mai
 - Test: `backend/tests/db/test_rls.py`
 
 - [ ] **Step 1:** `0002_rls.sql`: enable RLS on all tables; policy per table: `org_id = (select org_id from public.users where id = auth.uid())`; service role bypasses (worker/API use service connection but always filter by org_id in queries — belt and braces).
+- [ ] **Step 1b (from Task 5 review — service-role writes bypass RLS, so constrain at the DB):** add `unique(id, org_id)` on parent tables and composite FKs (`(property_id, org_id)`, `(entity_id, org_id)`, `(import_id, org_id)` etc. referencing them) so a service-role write can never stitch rows across orgs. Also pin `search_path` on `set_updated_at()` (`set search_path = ''` style) to clear the Supabase `function_search_path_mutable` advisor lint. Test: inserting a property_ownership row whose property and entity belong to different orgs fails with an FK violation.
 - [ ] **Step 2:** Failing test: create two orgs + two auth users via service role; as user A (anon key + JWT) insert a property; as user B select properties → must see zero rows; attempt update of A's row as B → 0 rows affected.
 - [ ] **Step 3:** PASS, commit `feat: RLS policies with cross-tenant test`.
 
