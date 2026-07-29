@@ -27,6 +27,15 @@ docs/
 
 **Conventions for every task:** TDD (test first, watch it fail, minimal code, watch it pass, commit). Docstrings in reStructuredText. Fail loudly — no silent catches, no default fallbacks. Never mark a step done without showing the passing command output. Commit after every green.
 
+**Run every project command from `backend/`, never the repo root.** The repo root is not a Python project, so `uv run` there falls back to the ambient environment (here: Anaconda, carrying **ruff 0.12.0**) instead of the project venv (**ruff 0.16.0**, pinned in `backend/pyproject.toml`). The two disagree — 0.12.0's defaults still include `E402`, so `ruff check` from the root reports import-placement errors on `evals/run_eval.py` and `scripts/seed_org.py` that the project's own ruff does not. This cost a false "verification failed" alarm during Task 13b review. Canonical forms:
+
+```
+cd backend && uv run --env-file ../.env pytest -q     # 200 tests as of Task 13b
+cd backend && uv run ruff check .
+```
+
+**Verification commands whose passing means little, and the ones that discriminate.** The full suite passed identically before and after the Task 13a event-loop fix, and both `tests/db tests/api` orderings passed before it too — so neither proves anything about engine/event-loop hygiene. When a fix targets a specific failure, record and re-run the *narrow repro*, not the suite. Likewise for org isolation: an isolation test only counts if it dies when you delete the `org_id` filter it guards, so probe it (see Task 13b's seven-site probe).
+
 **Security convention (spec §Security):** statement content (descriptions, amounts) must never appear in application logs at any level; agent prompts include only the fields categorisation needs. Applies to Tasks 11, 14, 18 — reviewers check for stray `logger.*(line...)` calls.
 
 **Capital-vs-revenue note:** the spec's "capital flag" is represented by the `CAPITAL_EXPENSE` enum value, not a separate boolean. Do not add a redundant flag column.
@@ -317,6 +326,24 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - Test: `backend/tests/api/test_imports.py`
 
 - [ ] **Step 0 (from Task 6 review — spec §Security "storage buckets namespaced per org"):** creating the statements bucket requires `storage.objects` RLS policies enforcing the `{org_id}/` path prefix (the `documents` table cannot enforce path isolation — `storage_path` is free text). Add policies restricting authenticated access to paths starting with their org id; service connection used by the API bypasses. Test: authenticated user cannot read an object under another org's prefix.
+
+  **Baseline measured on the live local stack 2026-07-29 (controller prep, ahead of the task):** there are **zero buckets** and **zero `storage.objects` policies**, but RLS **is** already enabled on both `storage.objects` and `storage.buckets`. So storage is currently deny-by-default for authenticated users — a safe starting point — and this step must create both the bucket and its policies. Prefer creating the bucket **in a migration** (reproducible; `supabase start` replays it) over a one-off script.
+
+  **Mirror the existing helper:** `public.current_org_id()` (`supabase/migrations/0002_rls.sql:35`) is `security definer`, `stable`, `set search_path = ''`, body `select org_id from public.users where id = auth.uid()`. All thirteen table policies use the uniform shape `org_id = (select public.current_org_id())`; storage policies should match it.
+
+  **VERIFIED TRAP — do not write the natural form.** `storage.foldername('<uuid>/2026/stmt.csv')` returns `{<uuid>,2026}` (folder segments, filename stripped). The obvious predicate
+
+  ```sql
+  (storage.foldername(name))[1]::uuid = (select public.current_org_id())   -- WRONG
+  ```
+
+  **errors** on any object whose first segment is not a UUID (`ERROR: invalid input syntax for type uuid: "personal"`). Because this is a policy predicate, one mis-pathed object breaks access evaluation for every scan of the bucket, not just for that object. Compare as text instead:
+
+  ```sql
+  (storage.foldername(name))[1] = (select public.current_org_id())::text   -- safe
+  ```
+
+  Both forms were measured against the live database, not reasoned about.
 - [ ] **Step 1:** Failing tests: `POST /imports` (multipart CSV + entity_id) stores file to Supabase Storage (`statements/{org_id}/...`), parses; on success creates `imports` row (status `parsed`) + `transactions` rows (status `unclassified`) + `job_queue` row (`type=categorise`); on `StatementParseError` creates `imports` row status `failed` with row-level error detail in response and DB — and NO transaction rows; `GET /imports` lists with status.
 - [ ] **Step 1b (sign convention — from Task 10 review):** the parser emits SIGNED amounts (negative = money out); the DB stores MAGNITUDE + `direction`. Task 14 MUST store `amount = abs(ParsedLine.amount)` and `direction = 'out' if line.amount < 0 else 'in'`. Failing test: a -84.99 parsed line lands as amount 84.99 / direction 'out'. Manual claims (null import_id, e.g. use_of_home_allowance) get `direction = 'out'`.
 - [ ] **Step 2:** Implement (repository layer in `src/db/`), PASS, commit.
