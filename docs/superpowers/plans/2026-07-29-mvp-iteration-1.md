@@ -319,6 +319,34 @@ Without this the delivered MVP cannot be used: every later task assumes orgs/ent
 - [ ] **Step 2:** Implement router + repository, PASS, commit `feat: portfolio setup endpoints`. Ownership and entity mutations write `audit_log` rows (ownership percentages directly change money computation — spec: audit every state change to money data). Certificates CRUD (Task 17) likewise writes audit rows.
 - [ ] **Step 3:** `scripts/seed_org.py`: idempotent CLI (`uv run python scripts/seed_org.py --email m.hoque@gmail.com --org "Hoque Portfolio"`) that creates the org and links the auth user (created beforehand via Supabase Studio or `supabase auth` CLI — Task 19 builds sign-in only, not sign-up), and prints next steps (add entities/properties via the UI or API). Unit-test the idempotency (second run = no duplicates). Commit.
 
+#### Step 4 — FIX ROUND (spec review returned ❌; code shipped at `de29829`/`c4bbc12`/`a2f48ef`, NOT yet ticked)
+
+The router's runtime behaviour was correct at every probed point (28 single-point mutations; 8 of 10 `org_id` filter sites each killed exactly one named guard test). **Every gap below is in test *discriminating power*, not in shipped behaviour** — which is the more dangerous defect here, because Tasks 14–17 will copy this module as the template for "proved it".
+
+- [ ] **4a. Property mutations must write `audit_log` rows** (`property.created` / `property.updated`). Spec:70 requires auditing "every state change to money **or compliance** data": `finance_cost_classification` routes a finance cost between the `finance_costs_residential` and `finance_costs_nonresidential` categories (money), and `epc_rating`/`epc_expiry`/`licensing_flag` are compliance data — `epc` is itself a `compliance_certificates` type in the spec's data model. **Step 2 above enumerated two cases and was mistaken for an exhaustive list; the spec governs.** Implementation note: `tests/api/test_portfolio.py:512` reads `(await audit_rows(...))[-1]` under `order by created_at, action`; adding `property.created` breaks that assertion on a `created_at` tie, because the alphabetical secondary sort puts it last. Filter by action rather than relying on ordering.
+- [ ] **4b. `test_put_ownership_rejects_out_of_range_percentages` is a tautology — replace its params.** All four cases send a **single** `{entity_id, percentage}`, so each fails the sum-to-100 rule regardless of the per-row bound. Verified: dropping `decimal_places=2`, `gt=0`, *or* `le=100` from `portfolio.py:225` leaves all 76 `tests/api` tests green. Measured consequences of the unguarded code, using payloads that sum to exactly 100:
+  - `decimal_places=2` dropped + `["33.333","66.667"]` → **HTTP 200**, stored `33.33`/`66.67`. A **silent money mutation** — `numeric(5,2)` rounds it away with no error anywhere. This is the worst of the three.
+  - `gt=0` dropped + `["0.00","100.00"]` → `CheckViolationError` → unhandled **500**, precisely the trap the docstring claims to prevent.
+  - `le=100` is **redundant by construction, not untested**: with `gt=0` in force and the sum pinned to exactly 100, no single share can exceed 100. A discriminating test cannot exist — stated here so nobody "fixes" it.
+
+  Replacement params (each verified to pass against shipped code and fail when its guard is dropped):
+  ```python
+  @pytest.mark.parametrize("percentages", [
+      ["0.00", "100.00"],            # pins gt=0
+      ["-10.00", "55.00", "55.00"],  # pins gt=0 for negatives
+      ["33.333", "66.667"],          # pins decimal_places=2 (the silent-rounding guard)
+  ])
+  ```
+  Same tautology, lower severity, in `test_rejected_ownership_payloads_leave_the_prior_set_untouched:755` (uses `[{other: "0.00"}]`, also sums to 0) and `test_put_ownership_rejects_an_empty_list:683` (dropping `Body(min_length=1)` keeps all 76 green since `[]` sums to 0). For the latter, assert `"too_short" in resp.text` to pin which rule fires.
+- [ ] **4c. Correct a false factual claim in two places.** `tests/api/test_portfolio.py:515` (test + docstring) and the comment at `portfolio.py:25` both state that `33.33 + 33.33 + 33.34` is `99.99999999999999` in binary floating point. **It is exactly `100.0`** — controller-verified. The test therefore does not discriminate the hazard it is named for. Use the verified counterexample `0.01 + 64.04 + 35.95` → float `100.00000000000001`, `Decimal` `100.00`. (The *code* is correct regardless: pydantic 2.12.5 parses JSON numbers to `Decimal` straight from the raw JSON text with no float intermediate, so no float can enter via the HTTP path.)
+- [ ] **4d. Assert the cross-org 404s are textually identical.** Entity/property cross-org 404s are identical *by construction* — `_not_found` at `portfolio.py:263-277` is the single source — but no test asserts it, and it is the one unverified cell in the isolation story. The ownership 422 equivalent is already pinned at `:879`.
+
+**Concurrency — DECIDED: pin and defer, not a spec violation.** Concurrent ownership `PUT`s on one property are not serialized, so two overlapping replacements under READ COMMITTED can leave a set summing to 200 (disjoint entities) or trip `uq_property_ownership_property_entity`. Spec §Error handling requires only that percentages sum to 100 and says nothing about serialization, and `0001_core.sql:228-234` documents that this invariant is API-validated *because* ownership is edited row-by-row against transiently-invalid totals. Decisively, **both race outcomes are loud, never silently wrong**: overlapping sets raise a unique violation, and a 200%-summing set is refused by `src/core/splits.py:126` (`ownership percentages must sum to 100, got {total}`) at the first apportionment. Money is never silently corrupted. **The one-line fix when it is wanted:** `.with_for_update()` on the property lookup at `portfolio.py:541-543` — house-sanctioned, since Task 18 already mandates `FOR UPDATE SKIP LOCKED`.
+
+**Recorded so no future reviewer chases them:** the ownership `existing` select (`portfolio.py:591`) and the subsequent `delete` (`:600`) are the 2 of 10 `org_id` filter sites whose removal kills nothing. They are redundant defence-in-depth — the property is already proven in-org above them — so no test *can* catch them. Keep them; they cost nothing.
+
+**DECISION NEEDED FROM MAHMUD (product, not engineering):** `_PatchBody`'s null-rejection (`portfolio.py:100-116`) means `epc_rating`, `epc_expiry`, `address_line2`, `prs_registration_number` and `prs_registered_at` can be corrected but **never cleared** through the API. The spec is silent. For a compliance app this is plausibly wrong — a mis-entered EPC expiry should be removable, not just editable. Options: allow explicit `null` to clear, or keep the current strictness and add a rationale comment. Also untested-but-shipped: `seed_org.py:104-108`'s multi-org-ambiguity `RuntimeError`.
+
 ### Task 14: Imports endpoint
 
 **Files:**

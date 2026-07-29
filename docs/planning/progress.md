@@ -77,13 +77,20 @@
 
 **Position:** 15 of 26 tasks done (Phase 5 in progress). Phases 0–4 complete. HEAD `ab2640b`, tree clean, 200 tests green.
 
-**IN FLIGHT when the session ended:** a read-only spec-compliance review of Task 13b (`de29829`/`c4bbc12`/`a2f48ef`). It was asked to (a) confirm the property-audit spec gap, (b) rule on the ownership-concurrency risk, (c) find gaps I had not already found. Its result may have landed after this note was written — check the task notification before assuming it didn't run.
+**Task 13b spec review LANDED (after the handoff note was first written): ❌ ISSUES FOUND.** Method: 28 single-point mutations in a throwaway worktree against the live stack. Runtime behaviour correct at every probed point; 8 of 10 `org_id` filter sites each killed exactly one named guard test. **All gaps are in test discriminating power, not shipped behaviour** — the dangerous kind here, since Tasks 14–17 will copy this module as the "proved it" template. Full fix-round spec written into plan Task 13b **Step 4** (`4a`–`4d`), commit below. Highlights:
+- **4b, highest severity:** `test_put_ownership_rejects_out_of_range_percentages` is a TAUTOLOGY — all four params send a *single* share, so each fails the sum-to-100 rule before the per-row bound is reached. Dropping `decimal_places=2`, `gt=0`, or `le=100` leaves all 76 api tests green. Measured: without `decimal_places=2`, `["33.333","66.667"]` returns **HTTP 200** and stores `33.33`/`66.67` — a **silent money mutation**, `numeric(5,2)` rounding it away with no error. Exact replacement params are in the plan. `le=100` is redundant-by-construction, not untested — noted so nobody "fixes" it.
+- **4c:** the float-hazard test and a code comment both claim `33.33+33.33+33.34 == 99.99999999999999`. **CONTROLLER-VERIFIED FALSE — it is exactly `100.0`.** Reviewer's counterexample `0.01+64.04+35.95` → `100.00000000000001` also verified. Code is fine regardless (pydantic 2.12.5 parses JSON numbers to Decimal from raw text, no float intermediate); the *test* and *comment* are wrong. Fourth confident-wrong-detail of this project, and the first one found inside shipped code comments.
+- **4a:** property-audit gap CONFIRMED by the reviewer, agreeing with the implementer and me. Plus a trap: `test_portfolio.py:512` reads `[-1]` under `order by created_at, action`, which `property.created` breaks on a `created_at` tie via the alphabetical secondary sort. Filter by action.
+- **Concurrency DECIDED — pin and defer, not a spec violation.** Both race outcomes are LOUD: overlapping sets raise the unique violation; a 200%-summing set is refused by `core/splits.py:126` at the first apportionment. Money is never silently corrupted. One-line fix recorded for when it's wanted (`.with_for_update()` at `portfolio.py:541-543`, house-sanctioned since Task 18 mandates `FOR UPDATE SKIP LOCKED`).
+- **NEW DECISION FOR MAHMUD (product):** `_PatchBody` null-rejection means `epc_rating`, `epc_expiry`, `address_line2`, and the PRS fields can be corrected but **never cleared** via the API. Spec silent. Plausibly wrong for a compliance app — a mis-entered EPC expiry should be removable.
 
 **NEXT ACTIONS, in order:**
-1. Read the Task 13b spec-review result. Then the code-quality review (stage 2) — do NOT tick 13b until both stages pass.
-2. Fix round for Task 13b: **property POST/PATCH must write `audit_log` rows** (confirmed spec requirement, not optional), plus whatever the two reviews raise. Also amend plan Task 13b Step 2, whose wording caused the gap by naming only entities + ownership.
-3. Decide the ownership-concurrency question: `SELECT ... FOR UPDATE` on the property row inside the ownership PUT, or pin it as a known deferral with the reasoning. Do not leave it undecided and unrecorded.
-4. Then Task 14 (imports endpoint). Step 0's storage groundwork is already researched and pinned in the plan (`ab2640b`) — measured baseline plus the `::uuid` policy-cast trap.
+1. Task 13b **Step 4 fix round** — spec is fully written in the plan (4a–4d), no re-derivation needed. Also amend Step 2's wording, which caused 4a by reading as an exhaustive list.
+2. Then stage-2 **code-quality review** of 13b. Do NOT tick 13b until both stages pass. (Stage 1 is ❌, so stage 2 has not been dispatched — order matters.)
+3. Ask Mahmud the `_PatchBody` null-clearing question; it is a product call, not an engineering one.
+4. Then Task 14 (imports endpoint). Step 0's storage groundwork is already researched and pinned (`ab2640b`) — measured baseline plus the `::uuid` policy-cast trap.
+
+**Deliberately NOT done overnight:** the fix round itself. Mahmud said "save for today, I need to sleep"; the shipped code is correct (the gaps are test-coverage), so nothing was urgent enough to justify working past an explicit stop.
 
 **STILL NEEDED FROM MAHMUD (not blocking 14–18, blocking 19+):**
 - Google Cloud OAuth client id/secret (Task 19, Flutter sign-in). Google-only auth, no email/password.
