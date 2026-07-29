@@ -90,6 +90,15 @@ def split_amount(amount: Decimal, shares: dict[UUID, Decimal]) -> dict[UUID, Dec
     if negative:
         result = {owner: -value for owner, value in result.items()}
 
+    # Postcondition on the tax-attribution primitive: every downstream tax
+    # figure trusts this sum. A future edit that breaks the invariant must
+    # fail loudly here, not surface as a quiet penny drift in an export.
+    allocated = sum(result.values(), start=Decimal(0))
+    if allocated != amount:
+        raise RuntimeError(
+            f"split_amount invariant broken: allocated {allocated} != amount {amount}"
+        )
+
     return result
 
 
