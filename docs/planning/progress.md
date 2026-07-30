@@ -90,6 +90,12 @@
 3. Ask Mahmud the `_PatchBody` null-clearing question; it is a product call, not an engineering one.
 4. Then Task 14 (imports endpoint). Step 0's storage groundwork is already researched and pinned (`ab2640b`) — measured baseline plus the `::uuid` policy-cast trap.
 
+### DECIDED BY MAHMUD 2026-07-30: `_PatchBody` null-clearing → **allow null to clear**
+An explicit `null` in a PATCH body wipes the field (`epc_rating`, `epc_expiry`, `address_line2`, `prs_registration_number`, `prs_registered_at`); **omitting** the key still leaves it untouched. Follows JSON Merge Patch (RFC 7386). Rationale: a mis-entered EPC expiry is a compliance problem and must be removable, not merely overwritable — the current 422 leaves a wrong value stuck short of direct DB access.
+- **NOT part of the Step 4 fix round** (that agent was told explicitly not to touch `_PatchBody`). Land it as its own follow-up after Step 4 commits, with `Task 13b Step 5` added to the plan then — holding the plan edit until the agent finishes, since it was told the plan is canonical and could otherwise implement a requirement its brief excluded.
+- Needs: `_PatchBody` distinguishing "key absent" from "key present and null" (pydantic `model_fields_set` / a sentinel, NOT `Optional` alone), tests for all three states per field (absent → unchanged, null → cleared, value → set), and an `audit_log` row on the clear since these are compliance fields (see 4a).
+- Frontend note for Task 22's portfolio settings screen: the ownership/property editor must send `null` rather than omitting a key when the user empties a field.
+
 **Deliberately NOT done overnight:** the fix round itself. Mahmud said "save for today, I need to sleep"; the shipped code is correct (the gaps are test-coverage), so nothing was urgent enough to justify working past an explicit stop.
 
 **STILL NEEDED FROM MAHMUD (not blocking 14–18, blocking 19+):**

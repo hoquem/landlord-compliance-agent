@@ -345,7 +345,18 @@ The router's runtime behaviour was correct at every probed point (28 single-poin
 
 **Recorded so no future reviewer chases them:** the ownership `existing` select (`portfolio.py:591`) and the subsequent `delete` (`:600`) are the 2 of 10 `org_id` filter sites whose removal kills nothing. They are redundant defence-in-depth — the property is already proven in-org above them — so no test *can* catch them. Keep them; they cost nothing.
 
-**DECISION NEEDED FROM MAHMUD (product, not engineering):** `_PatchBody`'s null-rejection (`portfolio.py:100-116`) means `epc_rating`, `epc_expiry`, `address_line2`, `prs_registration_number` and `prs_registered_at` can be corrected but **never cleared** through the API. The spec is silent. For a compliance app this is plausibly wrong — a mis-entered EPC expiry should be removable, not just editable. Options: allow explicit `null` to clear, or keep the current strictness and add a rationale comment. Also untested-but-shipped: `seed_org.py:104-108`'s multi-org-ambiguity `RuntimeError`.
+#### Step 5 — nullable property fields must be clearable (DECIDED by Mahmud 2026-07-30)
+
+`_PatchBody`'s null-rejection (`portfolio.py:100-116`) currently means `epc_rating`, `epc_expiry`, `address_line2`, `prs_registration_number` and `prs_registered_at` can be corrected but **never cleared** through the API. **Decision: an explicit `null` clears the field; omitting the key still leaves it untouched** — JSON Merge Patch semantics (RFC 7386). Rationale: a mis-entered EPC expiry is a compliance problem and must be removable, not merely overwritable; the current 422 strands a wrong value short of direct database access.
+
+- [ ] **5a:** `_PatchBody` must distinguish three states per field — key absent, key present and `null`, key present with a value. `Optional[T]` alone cannot express this; use pydantic's `model_fields_set` (or an explicit sentinel default). Getting this wrong silently turns "clear it" into "leave it alone", which is the failure mode the whole change exists to remove.
+- [ ] **5b:** Test all three states for **each** of the five fields: absent → unchanged, `null` → cleared, value → set. A single field tested three ways is not enough — the bug this guards against is per-field.
+- [ ] **5c:** Clearing writes a `property.updated` `audit_log` row like any other mutation — these are compliance fields, same spec:70 clause that drove 4a. The `before`/`after` JSON must show the cleared field going to `null`, not omit it.
+- [ ] **5d:** Applies to `PATCH /entities` too if it has nullable fields (`prs_registration_number`, `prs_registered_at`) — check, don't assume the two bodies are symmetric.
+
+**Downstream consequence for Task 22** (portfolio settings screen): the Flutter form must send `null` when the user empties a field, not drop the key. Dropping it will silently do nothing, and the UI will appear to lose the edit on reload.
+
+**Also untested-but-shipped, decide separately:** `seed_org.py:104-108`'s multi-org-ambiguity `RuntimeError`.
 
 ### Task 14: Imports endpoint
 
