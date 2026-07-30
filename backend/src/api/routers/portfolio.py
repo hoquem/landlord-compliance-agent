@@ -4,18 +4,24 @@ The foundational reference data everything else in the product hangs off --
 an org's ownership entities, its properties, and the split that says which
 entity owns what share of which property.
 
-**Every query in this module filters ``org_id`` explicitly, and that is the
-only tenant isolation there is here.** ``src/db/session.py`` connects as the
-``postgres`` superuser, so the row-level-security policies in
-``supabase/migrations/0002_rls.sql`` -- which protect the PostgREST path the
-Flutter app uses directly -- are inert on everything below. There is no
+**Every query in this module filters ``org_id`` -- either explicitly, in the
+statement below, or through :func:`~src.api.scoping.get_owned_or_404`, which
+does it for the four "one row by id" lookups. That is the only tenant
+isolation there is here.** ``src/db/session.py`` connects as the ``postgres``
+superuser, as ``DATABASE_URL`` is configured, so the row-level-security
+policies in ``supabase/migrations/0002_rls.sql`` -- which protect the
+PostgREST path the Flutter app uses directly -- are inert on everything
+below. (That is a property of the connection string rather than of any code
+here: ``session.py`` connects as whoever ``DATABASE_URL`` names.) There is no
 backstop underneath a forgotten filter, only a silent cross-tenant leak, so:
 reads filter ``org_id`` (a row in another org is a **404**, never a 403,
 which would confirm it exists), writes filter ``org_id`` in the statement
 that finds the row *before* anything is mutated, and an ``entity_id`` handed
 in by a client is checked against the caller's org before it can be
 referenced. ``backend/tests/api/test_portfolio.py``'s tenant-isolation
-section is what holds this up.
+section is what holds this up -- and holds it up in fact, not in principle:
+making ``get_owned_or_404`` ignore ``auth.org_id`` was checked to fail eight
+of those tests.
 
 Two things are load-bearing beyond ordinary CRUD:
 
@@ -45,7 +51,11 @@ Section 24 restriction (money), while ``epc_rating``, ``epc_expiry`` and
 ``compliance_certificates`` type in the data model.
 
 :seealso: backend/src/api/auth.py (the ``org_id`` this module filters on);
-    backend/src/core/splits.py; supabase/migrations/0001_core.sql.
+    backend/src/api/scoping.py (``get_owned_or_404`` and the shared 404);
+    backend/src/core/splits.py; supabase/migrations/0001_core.sql;
+    supabase/migrations/0002_rls.sql (where the composite FK
+    ``fk_property_ownership_entity_org`` named below is defined, along with
+    the RLS policies this module bypasses).
 """
 
 import datetime
@@ -59,6 +69,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import delete, null, select
 
 from src.api.auth import CurrentAuth
+from src.api.scoping import get_owned_or_404, not_found
 from src.db.models import AuditLog, Entity, Property, PropertyOwnership
 from src.db.session import async_session_factory
 
@@ -100,10 +111,22 @@ class _PatchBody(_StrictBody):
 
     * ``{}`` -- nothing to do. Returning 200 would tell the caller its
       (mistaken) update had been applied.
-    * ``{"field": null}`` -- for the NOT NULL columns this would reach
-      Postgres as an IntegrityError (a 500), and for the nullable ones it
-      would mean "clear this field", an operation the MVP doesn't offer. A
-      422 saying so beats guessing either way.
+    * ``{"field": null}`` -- refused for every field, whatever its column's
+      nullability. On a NOT NULL column a null would reach Postgres as an
+      IntegrityError (a 500); on a nullable one it would have to mean "clear
+      this field". Today neither is offered, and a 422 naming the fields
+      beats guessing between them.
+
+    **Pending change, so that this does not quietly become false:** the
+    nullable half is decided and not yet built. Step 5 of Task 13b makes
+    ``null`` *clear* a nullable field (``address_line2``, ``epc_rating``,
+    ``epc_expiry``, ``bedroom_count``, ``prs_registration_number``,
+    ``prs_registered_at``), leaving this blanket refusal only for the NOT
+    NULL columns. Described here as it behaves today, with the direction of
+    travel named. ``test_patch_entity_cannot_null_a_field`` is the only test
+    pinning today's refusal -- there is no ``PATCH /properties`` equivalent,
+    so the property side of this rule is asserted here and unenforced; Step
+    5b is where per-field coverage arrives.
     """
 
     @model_validator(mode="after")
@@ -229,12 +252,21 @@ class OwnershipShare(_StrictBody):
     number, and rounding money silently is exactly what this project must
     not do.
 
-    ``le=100`` is redundant by construction rather than merely untested, and
-    is kept only to mirror the CHECK constraint. The endpoint refuses any
-    set that does not sum to exactly 100, and ``gt=0`` makes every other
-    share positive, so no single share can reach 100.01 without the sum
-    already exceeding 100. **No test can discriminate ``le=100``** -- do not
-    spend time trying to write one.
+    ``le=100`` does not change which payloads are *accepted*: the endpoint
+    refuses any set that does not sum to exactly 100, and ``gt=0`` makes
+    every other share positive, so no single share can reach 100.01 without
+    the sum already exceeding 100. It is kept to mirror the CHECK
+    constraint.
+
+    That redundancy is about the accepted set only -- it does **not** follow
+    that removing the bound is unobservable. It changes *which rule refuses*
+    an over-100 share, and so the 422 body: with ``le=100`` a lone
+    ``100.01`` is a pydantic ``less_than_equal`` error, and without it
+    pydantic accepts the value (5 digits at 2dp, so ``max_digits`` and
+    ``decimal_places`` do not catch it) and the handler's sum rule answers
+    ``"must sum to exactly 100, got 100.01"`` instead.
+    ``test_put_ownership_over_100_is_refused_by_the_field_bound`` asserts the
+    first of those, and was checked to fail when ``le=100`` is deleted.
     """
 
     entity_id: uuid.UUID
@@ -276,23 +308,6 @@ class OwnershipRead(BaseModel):
 # ---------------------------------------------------------------------------
 # Small shared helpers.
 # ---------------------------------------------------------------------------
-def _not_found(what: str, resource_id: uuid.UUID) -> HTTPException:
-    """Build the 404 used for "no such row *in your org*".
-
-    Deliberately the same response whether the row doesn't exist or belongs
-    to another org: a 403 for the second case would confirm to the caller
-    that the id is real.
-
-    :param what: the resource kind, for the message.
-    :param resource_id: the id that couldn't be used.
-    :returns: a 404 :class:`~fastapi.HTTPException`.
-    """
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"No {what} with id {resource_id} in this org.",
-    )
-
-
 def _unprocessable(detail: str) -> HTTPException:
     """Build a 422 for a payload that parsed but can't be acted on.
 
@@ -394,11 +409,7 @@ async def get_entity(entity_id: uuid.UUID, auth: CurrentAuth) -> EntityRead:
     :returns: the entity.
     """
     async with async_session_factory() as session:
-        entity = await session.scalar(
-            select(Entity).where(Entity.id == entity_id, Entity.org_id == auth.org_id)
-        )
-        if entity is None:
-            raise _not_found("entity", entity_id)
+        entity = await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
         return EntityRead.model_validate(entity)
 
 
@@ -406,9 +417,11 @@ async def get_entity(entity_id: uuid.UUID, auth: CurrentAuth) -> EntityRead:
 async def update_entity(entity_id: uuid.UUID, payload: EntityUpdate, auth: CurrentAuth) -> EntityRead:
     """Update the named fields of one entity in the caller's org.
 
-    The org filter is on the statement that *finds* the row, so a
-    cross-org id fails with a 404 before anything is written -- never a
-    silent no-op 200.
+    The org filter is on the statement that *finds* the row (see
+    :func:`~src.api.scoping.get_owned_or_404`), so a cross-org id fails with
+    a 404 before anything is written -- never a silent no-op 200. Pinned by
+    ``test_org_a_cannot_patch_org_bs_entity``, which asserts both the 404 and
+    that the row and audit trail were left alone.
 
     :param entity_id: the entity to update.
     :param payload: the fields to change.
@@ -417,11 +430,7 @@ async def update_entity(entity_id: uuid.UUID, payload: EntityUpdate, auth: Curre
     :returns: the updated entity.
     """
     async with async_session_factory() as session:
-        entity = await session.scalar(
-            select(Entity).where(Entity.id == entity_id, Entity.org_id == auth.org_id)
-        )
-        if entity is None:
-            raise _not_found("entity", entity_id)
+        entity = await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
 
         before = EntityRead.model_validate(entity).model_dump(mode="json")
         for field, value in payload.model_dump(exclude_unset=True).items():
@@ -493,11 +502,7 @@ async def get_property(property_id: uuid.UUID, auth: CurrentAuth) -> PropertyRea
     :returns: the property.
     """
     async with async_session_factory() as session:
-        prop = await session.scalar(
-            select(Property).where(Property.id == property_id, Property.org_id == auth.org_id)
-        )
-        if prop is None:
-            raise _not_found("property", property_id)
+        prop = await get_owned_or_404(session, Property, property_id, auth, what="property")
         return PropertyRead.model_validate(prop)
 
 
@@ -511,15 +516,12 @@ async def update_property(
     :param payload: the fields to change.
     :param auth: the authenticated caller.
     :raises HTTPException: 404 if no such property exists in their org --
-        raised by the org-filtered lookup, before any write.
+        raised by the org-filtered lookup, before any write. Pinned by
+        ``test_org_a_cannot_patch_org_bs_property``.
     :returns: the updated property.
     """
     async with async_session_factory() as session:
-        prop = await session.scalar(
-            select(Property).where(Property.id == property_id, Property.org_id == auth.org_id)
-        )
-        if prop is None:
-            raise _not_found("property", property_id)
+        prop = await get_owned_or_404(session, Property, property_id, auth, what="property")
 
         before = PropertyRead.model_validate(prop).model_dump(mode="json")
         for field, value in payload.model_dump(exclude_unset=True).items():
@@ -569,11 +571,18 @@ async def replace_property_ownership(
     :returns: the ownership set as stored.
     """
     async with async_session_factory() as session:
+        # An existence probe, not a load: nothing here reads a property
+        # column. Written out rather than routed through
+        # `get_owned_or_404` for that reason -- it selects one column, not
+        # the row -- but it raises the *same* `not_found`, so a cross-org
+        # property id is reported here exactly as it is by GET
+        # /properties/{id}. Pinned by
+        # `test_org_a_cannot_set_ownership_on_org_bs_property`.
         property_exists = await session.scalar(
             select(Property.id).where(Property.id == property_id, Property.org_id == auth.org_id)
         )
         if property_exists is None:
-            raise _not_found("property", property_id)
+            raise not_found("property", property_id)
 
         # Duplicates first: they would also skew the total, and
         # "you named this entity twice" is the more useful of the two
@@ -590,6 +599,17 @@ async def replace_property_ownership(
                 f"repeated: {', '.join(repeated)}."
             )
 
+        # Non-empty (`Body(min_length=1)`), each share > 0 (`gt=0`), sum
+        # exactly 100: the same three rules `src/core/splits.py`'s
+        # `_validate_shares` applies to a share map before apportioning
+        # money by it. Deliberately re-implemented rather than delegated --
+        # this endpoint must name the offending duplicates and unusable
+        # entities, must answer 422 rather than raise
+        # `InvalidOwnershipError`, and must decide before it writes, none of
+        # which `_validate_shares` does. What keeps the two from drifting is
+        # `test_an_api_accepted_ownership_set_is_usable_by_split_amount`,
+        # which feeds a set this endpoint accepted straight into
+        # `split_amount`.
         total = sum((share.percentage for share in shares), Decimal(0))
         if total != _WHOLE:
             raise _unprocessable(

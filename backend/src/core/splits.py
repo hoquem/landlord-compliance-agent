@@ -6,7 +6,15 @@ jointly-held properties derive *exclusively* from the
 amount must land on exactly one owner and the shares must sum back to
 the original amount with no rounding drift.
 
-:seealso: spec -- HMRC PIM1035 joint ownership attribution.
+:seealso: spec -- HMRC PIM1035 joint ownership attribution;
+    ``backend/src/api/routers/portfolio.py`` (``PUT
+    /properties/{id}/ownership``), which independently enforces the same
+    three rules :func:`_validate_shares` applies -- non-empty, every share
+    above zero, summing to exactly 100 -- because it has to answer 422 and
+    name the offending entities rather than raise
+    :class:`InvalidOwnershipError`. The two are kept in step by
+    ``test_an_api_accepted_ownership_set_is_usable_by_split_amount``, so
+    tightening anything here without tightening there fails loudly.
 """
 
 from __future__ import annotations

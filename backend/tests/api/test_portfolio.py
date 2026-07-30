@@ -12,13 +12,26 @@ in one test), ``org_user``, ``mint_token``, and the RLS-bypassing ``db()``
 connection used to arrange and assert DB state.
 
 **Why the tenant-isolation tests matter more than the rest of this file.**
-``src/db/session.py`` connects as the ``postgres`` superuser, which bypasses
-row level security -- so the RLS policies of ``0002_rls.sql`` are inert on
-every query this router makes. The only thing keeping org A out of org B's
-data is the explicit ``org_id`` filter in each statement, and a forgotten
-one is a silent cross-tenant leak. Hence
+``src/db/session.py`` connects as the ``postgres`` superuser (as
+``DATABASE_URL`` is configured), which bypasses row level security -- so the
+RLS policies of ``0002_rls.sql`` are inert on every query this router makes.
+The only thing keeping org A out of org B's data is the ``org_id`` filter in
+each statement -- written out in the router, or applied by
+``src.api.scoping.get_owned_or_404`` for the four "one row by id" lookups --
+and a forgotten one is a silent cross-tenant leak. Hence
 ``test_org_a_cannot_*``/``..._is_404``: two orgs, two real tokens, asserted
 through the API rather than at the DB level.
+
+These tests have teeth, checked rather than assumed: making
+``get_owned_or_404`` ignore ``auth.org_id`` fails
+``test_org_a_cannot_read_org_bs_entity``, ``..._property``,
+``test_org_a_cannot_patch_org_bs_entity``, ``..._property`` and all four
+cases of ``test_a_cross_org_404_is_identical_to_a_nonexistent_one`` -- eight
+in all. It does **not** fail
+``test_org_a_cannot_set_ownership_on_org_bs_property``: that 404 comes from
+the ownership handler's own existence probe, which the helper was
+deliberately not given. Probed separately, and it does have teeth --
+rewording *that* probe's 404 fails it and nothing else.
 
 ``scripts/seed_org.py``'s idempotency tests are in the final section of this
 module rather than a file of their own: the script drives the same app-level
@@ -36,6 +49,7 @@ from httpx import ASGITransport, AsyncClient
 from scripts.seed_org import seed_org
 from src.api.main import app
 from src.api.routers import portfolio
+from src.core.splits import split_amount
 from tests.api.conftest import AuthUser, OrgUser, db, mint_token
 
 # ---------------------------------------------------------------------------
@@ -758,10 +772,12 @@ async def test_put_ownership_rejects_out_of_range_percentages(
       ``numeric(5,2)`` stores 33.33/66.67 -- money silently altered, with no
       error raised anywhere.
 
-    ``le=100`` has no case here because none can exist: see
-    :class:`~src.api.routers.portfolio.OwnershipShare`, where the bound
-    lives. With ``gt=0`` in force and the sum pinned to 100, no single share
-    can exceed 100.
+    ``le=100`` has no case *in this parametrize*, and cannot have one: every
+    payload here sums to exactly 100, and with ``gt=0`` in force no single
+    share of such a set can exceed 100. It is pinned separately, by
+    ``test_put_ownership_over_100_is_refused_by_the_field_bound``, whose
+    payload deliberately breaks the sum rule so that the field bound is
+    reached at all.
     """
     prop = await create_property(org_user)
     shares = [
@@ -777,6 +793,45 @@ async def test_put_ownership_rejects_out_of_range_percentages(
 
     resp = await as_user(org_user, "PUT", f"/properties/{prop['id']}/ownership", shares)
     assert resp.status_code == 422, resp.text
+    assert await ownership_rows(prop["id"]) == []
+
+
+async def test_put_ownership_over_100_is_refused_by_the_field_bound(org_user: OrgUser) -> None:
+    """A single share above 100 must be refused by ``le=100``, not by the sum rule.
+
+    ``le=100`` cannot change which payloads are *accepted* -- a lone 100.01
+    misses the sum-to-100 rule as well -- which is why it needs its own test
+    rather than a case in ``test_put_ownership_rejects_out_of_range_percentages``,
+    whose payloads all sum to exactly 100 by design.
+
+    What it can change is **which rule refuses**, and therefore the 422 body.
+    The ``less_than_equal`` assertion is the whole test: with the bound in
+    place, pydantic rejects the field. Delete it and pydantic *accepts*
+    ``Decimal("100.01")`` -- 5 digits at 2dp, so ``max_digits`` and
+    ``decimal_places`` do not catch it -- and the request reaches the
+    handler, which answers ``"must sum to exactly 100, got 100.01"``. Still
+    a 422, different body. Checked: removing ``le=100`` fails this test on
+    the ``less_than_equal`` assertion, not on the status code. Same
+    assert-which-rule-refused technique as
+    ``test_put_ownership_rejects_an_empty_list``'s ``too_short``.
+
+    The property and entity are real so that the mutation's failure is the
+    documented one: against a non-existent property the bound-less request
+    would 404 at the ownership lookup and never reach the sum rule.
+    """
+    prop = await create_property(org_user)
+    entity = await create_entity(org_user)
+
+    resp = await as_user(
+        org_user,
+        "PUT",
+        f"/properties/{prop['id']}/ownership",
+        [{"entity_id": entity["id"], "percentage": "100.01"}],
+    )
+    assert resp.status_code == 422, resp.text
+    assert "less_than_equal" in resp.text, (
+        f"an over-100 share must be refused by the field bound, not the sum rule: {resp.text}"
+    )
     assert await ownership_rows(prop["id"]) == []
 
 
@@ -807,6 +862,56 @@ async def test_put_ownership_rejects_an_unknown_entity_id(org_user: OrgUser) -> 
     )
     assert resp.status_code == 422, resp.text
     assert missing in resp.text, f"the 422 must name the unusable entity: {resp.text}"
+
+
+async def test_an_api_accepted_ownership_set_is_usable_by_split_amount(
+    org_user: OrgUser,
+) -> None:
+    """Whatever this endpoint stores must be a share map ``split_amount`` will take.
+
+    ``PUT /properties/{id}/ownership`` re-implements the three rules
+    ``src/core/splits.py:_validate_shares`` applies -- non-empty, every share
+    above zero, summing to exactly 100 -- rather than calling it, because the
+    endpoint has to answer 422 and name the offending entities instead of
+    raising ``InvalidOwnershipError``, and has to decide before it writes.
+    Two copies of a rule drift.
+
+    This is the drift guard, and it is deliberately *not* a coupling: it
+    asserts only that the accepted set is acceptable downstream, so it fails
+    if ``splits.py`` later tightens (or the endpoint loosens) without either
+    caring how the two report their rejections. Nothing here re-tests
+    apportionment itself -- ``tests/core/test_splits.py`` owns that -- so the
+    assertion is that ``split_amount`` returns at all, plus its own
+    penny-exactness postcondition.
+
+    The 0.01/64.04/35.95 payload is reused from
+    ``test_put_ownership_sums_json_numbers_exactly``: a set whose smallest
+    share rounds to zero pennies on a small amount is the one most likely to
+    expose a disagreement between the two validators.
+    """
+    prop = await create_property(org_user)
+    entities = [await create_entity(org_user, name=f"Share {index}") for index in range(3)]
+
+    resp = await as_user(
+        org_user,
+        "PUT",
+        f"/properties/{prop['id']}/ownership",
+        [
+            {"entity_id": entities[0]["id"], "percentage": "0.01"},
+            {"entity_id": entities[1]["id"], "percentage": "64.04"},
+            {"entity_id": entities[2]["id"], "percentage": "35.95"},
+        ],
+    )
+    assert resp.status_code == 200, resp.text
+
+    stored = {
+        uuid.UUID(str(row["entity_id"])): row["ownership_percentage"]
+        for row in await ownership_rows(prop["id"])
+    }
+    allocated = split_amount(Decimal("1234.56"), stored)
+
+    assert set(allocated) == set(stored), "every accepted owner must receive a share"
+    assert sum(allocated.values(), Decimal(0)) == Decimal("1234.56")
 
 
 async def test_put_ownership_on_unknown_property_is_404(org_user: OrgUser) -> None:
@@ -943,34 +1048,51 @@ async def test_org_a_cannot_patch_org_bs_property(make_org_user) -> None:
     )
 
 
+@pytest.mark.parametrize("method", ["GET", "PATCH"])
 @pytest.mark.parametrize("kind", ["entity", "property"])
-async def test_a_cross_org_404_is_identical_to_a_nonexistent_one(make_org_user, kind: str) -> None:
-    """Reading another org's row must be indistinguishable from reading nothing.
+async def test_a_cross_org_404_is_identical_to_a_nonexistent_one(
+    make_org_user, kind: str, method: str
+) -> None:
+    """Another org's row must be indistinguishable from no row, on every verb.
 
     The 404 body is the last channel through which a caller could confirm
     that an id it guessed is real: if "belongs to someone else" read even
     slightly differently from "no such row", the endpoint would be an
-    existence oracle over every other tenant's ids. ``_not_found`` is the
-    single source of both, so they are identical by construction -- this
-    pins that, since the construction is one refactor away from changing.
+    existence oracle over every other tenant's ids.
+    ``src.api.scoping.not_found`` is the single source of both, so they are
+    identical by construction -- this pins that, since the construction is
+    one refactor away from changing.
+
+    **Parametrised over the method as well as the kind** because
+    ``test_org_a_cannot_patch_org_bs_entity``/``_property`` assert only the
+    status code. PATCH runs the same lookup through the same
+    ``get_owned_or_404`` and answers on the same channel, so the body
+    property is exactly as load-bearing there; asserting it only for GET
+    would leave a "helpfully" reworded PATCH 404 free to ship. The mutation
+    that proves this: making ``get_owned_or_404`` fall back to an unfiltered
+    lookup and word the cross-org case differently fails all four cases here
+    and none of the status-only tests.
 
     Compared per resource kind, not across kinds: the message interpolates
     "entity"/"property", so an entity 404 and a property 404 legitimately
-    differ. Mirrors the ownership-422 equivalent in
+    differ. The PATCH bodies are valid ones -- an empty or nulling body
+    would be refused by ``_PatchBody`` before any lookup happened, testing
+    nothing about org scoping. Mirrors the ownership-422 equivalent in
     ``test_org_a_cannot_attach_org_bs_entity_to_its_own_property``.
     """
     org_a = await make_org_user()
     org_b = await make_org_user()
     if kind == "entity":
         theirs = await create_entity(org_b, name="Org B entity")
-        path = "/entities"
+        path, body = "/entities", {"name": "Hijacked"}
     else:
         theirs = await create_property(org_b, address_line1="Org B address")
-        path = "/properties"
+        path, body = "/properties", {"address_line1": "Hijacked"}
+    payload = body if method == "PATCH" else None
 
-    cross_org = await as_user(org_a, "GET", f"{path}/{theirs['id']}")
+    cross_org = await as_user(org_a, method, f"{path}/{theirs['id']}", payload)
     unknown = str(uuid.uuid4())
-    nonexistent = await as_user(org_a, "GET", f"{path}/{unknown}")
+    nonexistent = await as_user(org_a, method, f"{path}/{unknown}", payload)
 
     assert cross_org.status_code == nonexistent.status_code == 404, cross_org.text
     assert cross_org.text.replace(theirs["id"], "X") == nonexistent.text.replace(unknown, "X"), (
@@ -980,20 +1102,36 @@ async def test_a_cross_org_404_is_identical_to_a_nonexistent_one(make_org_user, 
 
 
 async def test_org_a_cannot_set_ownership_on_org_bs_property(make_org_user) -> None:
-    """A cross-org ownership PUT must 404 and write nothing at all."""
+    """A cross-org ownership PUT must 404, write nothing, and read like a missing id.
+
+    The body-identity half is asserted here rather than in
+    ``test_a_cross_org_404_is_identical_to_a_nonexistent_one``'s
+    ``(kind, method)`` grid because this endpoint exists for properties only
+    and needs a valid org-A entity in its body, so it does not fit that
+    grid's shape. The property it is checking is the same one: this 404 comes
+    from the ownership handler's own existence probe rather than from
+    ``get_owned_or_404``, and a probe that answered differently would make
+    the endpoint an existence oracle over other tenants' property ids just
+    as surely. Mirrors the 422 comparison in
+    ``test_org_a_cannot_attach_org_bs_entity_to_its_own_property``.
+    """
     org_a = await make_org_user()
     org_b = await make_org_user()
     theirs = await create_property(org_b)
     mine = await create_entity(org_a, name="Org A entity")
+    share = [{"entity_id": mine["id"], "percentage": "100.00"}]
 
-    resp = await as_user(
-        org_a,
-        "PUT",
-        f"/properties/{theirs['id']}/ownership",
-        [{"entity_id": mine["id"], "percentage": "100.00"}],
-    )
+    resp = await as_user(org_a, "PUT", f"/properties/{theirs['id']}/ownership", share)
     assert resp.status_code == 404, resp.text
     assert await ownership_rows(theirs["id"]) == []
+
+    unknown = str(uuid.uuid4())
+    unknown_resp = await as_user(org_a, "PUT", f"/properties/{unknown}/ownership", share)
+    assert unknown_resp.status_code == 404, unknown_resp.text
+    assert unknown_resp.text.replace(unknown, "X") == resp.text.replace(theirs["id"], "X"), (
+        "another org's property and a non-existent one must be reported identically, "
+        "or the 404 confirms which property ids exist"
+    )
 
 
 async def test_org_a_cannot_attach_org_bs_entity_to_its_own_property(make_org_user) -> None:
@@ -1109,6 +1247,46 @@ async def test_seed_org_without_an_auth_user_fails_loudly(seeded_orgs: list[str]
     async with db() as conn:
         assert await conn.fetchval("select count(*) from orgs where name = $1", org_name) == 0, (
             "a failed seed must not leave an org behind"
+        )
+
+
+async def test_seed_org_refuses_an_ambiguous_org_name(
+    make_auth_user, seeded_orgs: list[str]
+) -> None:
+    """Two orgs of the same name make the idempotency key ambiguous -- a hard error.
+
+    ``org_name`` is this script's idempotency key: rerunning with the same
+    name is supposed to reuse the same org. Two orgs of that name means
+    "reuse the same one" has no answer, and silently taking the first would
+    make a rerun's result depend on row order.
+
+    The guard is genuinely reachable, not defensive dead code: ``orgs.name``
+    carries **no** unique constraint (``0001_core.sql:150-155``), so the two
+    rows below insert without complaint. Arranged over the direct ``db()``
+    connection because the script itself refuses to create the second one.
+
+    ``make_auth_user`` rather than ``make_org_user`` deliberately: the
+    ambiguity check (``seed_org.py:103-108``) runs *before* the
+    already-linked check, so an org-less user leaves it as the only guard
+    that can fire, instead of relying on that ordering.
+    """
+    user: AuthUser = await make_auth_user()
+    org_name = f"Seed test org {uuid.uuid4().hex}"
+    seeded_orgs.append(org_name)
+
+    async with db() as conn:
+        for _ in range(2):
+            await conn.execute("insert into orgs (name) values ($1)", org_name)
+
+    with pytest.raises(RuntimeError, match=org_name):
+        await seed_org(email=user.email, org_name=org_name)
+
+    async with db() as conn:
+        assert await conn.fetchval("select count(*) from orgs where name = $1", org_name) == 2, (
+            "the refusal must not have created a third org"
+        )
+        assert await conn.fetchval("select count(*) from users where id = $1", user.user_id) == 0, (
+            "an ambiguous run must link nobody"
         )
 
 
