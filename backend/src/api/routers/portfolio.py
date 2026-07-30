@@ -22,18 +22,27 @@ Two things are load-bearing beyond ordinary CRUD:
 * **Ownership percentages are money.** ``src/core/splits.py`` apportions
   every penny of income and expense by them (HMRC PIM1035), so they are
   parsed as :class:`decimal.Decimal` and must sum to *exactly* 100 -- never
-  ``float``, where ``33.33 + 33.33 + 33.34`` is 99.99999999999999.
+  ``float``, where ``0.01 + 64.04 + 35.95`` is 100.00000000000001 rather
+  than the 100 those same figures give in decimal. Nothing here relies on
+  spotting such a slip after the fact: pydantic builds each ``Decimal``
+  from the raw JSON number text, with no ``float`` in between, so a value
+  that reached this module has never been binary floating point. That is a
+  property of the parser rather than of this module, so it is pinned by
+  test rather than assumed --
+  ``test_put_ownership_sums_json_numbers_exactly`` fails loudly if a
+  future pydantic changes it.
 * **Replacing an ownership set is atomic.** ``PUT`` takes the whole set and
   validates all of it before deleting or inserting anything, inside one
   transaction. A partially applied replacement would silently corrupt the
   split that later exports are computed from.
 
-Entity and ownership mutations write ``audit_log`` rows (the spec: audit
-every state change to money data). Property mutations do not, which is a
-line worth revisiting -- ``properties.finance_cost_classification`` drives
-the Section 24 finance-cost restriction, so it is arguably money data too --
-but the task specifies entities and ownership, so widening it is a decision
-for whoever owns the audit scope, not a side effect of this router.
+Entity, property and ownership mutations all write ``audit_log`` rows: the
+spec requires auditing every state change to money **or compliance** data,
+and properties carry both. ``finance_cost_classification`` routes a finance
+cost between the residential and non-residential categories that drive the
+Section 24 restriction (money), while ``epc_rating``, ``epc_expiry`` and
+``licensing_flag`` are compliance data -- ``epc`` is itself a
+``compliance_certificates`` type in the data model.
 
 :seealso: backend/src/api/auth.py (the ``org_id`` this module filters on);
     backend/src/core/splits.py; supabase/migrations/0001_core.sql.
@@ -219,6 +228,13 @@ class OwnershipShare(_StrictBody):
     decimal place too: ``numeric(5,2)`` would round it into a *different*
     number, and rounding money silently is exactly what this project must
     not do.
+
+    ``le=100`` is redundant by construction rather than merely untested, and
+    is kept only to mirror the CHECK constraint. The endpoint refuses any
+    set that does not sum to exactly 100, and ``gt=0`` makes every other
+    share positive, so no single share can reach 100.01 without the sum
+    already exceeding 100. **No test can discriminate ``le=100``** -- do not
+    spend time trying to write one.
     """
 
     entity_id: uuid.UUID
@@ -438,10 +454,17 @@ async def create_property(payload: PropertyCreate, auth: CurrentAuth) -> Propert
     async with async_session_factory() as session:
         prop = Property(org_id=auth.org_id, **payload.model_dump())
         session.add(prop)
+        # Flush (not commit) so the row -- and the server-generated id and
+        # timestamps the response and audit payload both need -- exists
+        # inside this transaction, alongside the audit row.
         await session.flush()
         await session.refresh(prop)
+        created = PropertyRead.model_validate(prop)
+        session.add(
+            _audit(auth, "property.created", before=None, after=created.model_dump(mode="json"))
+        )
         await session.commit()
-    return PropertyRead.model_validate(prop)
+    return created
 
 
 @router.get("/properties")
@@ -498,12 +521,20 @@ async def update_property(
         if prop is None:
             raise _not_found("property", property_id)
 
+        before = PropertyRead.model_validate(prop).model_dump(mode="json")
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(prop, field, value)
         await session.flush()
+        # `updated_at` is maintained by the trg_properties_set_updated_at
+        # trigger, so the new value has to be read back, not assumed.
         await session.refresh(prop)
+
+        updated = PropertyRead.model_validate(prop)
+        session.add(
+            _audit(auth, "property.updated", before=before, after=updated.model_dump(mode="json"))
+        )
         await session.commit()
-    return PropertyRead.model_validate(prop)
+    return updated
 
 
 # ---------------------------------------------------------------------------

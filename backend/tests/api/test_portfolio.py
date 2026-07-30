@@ -441,6 +441,56 @@ async def test_patch_property_updates_only_the_named_fields(org_user: OrgUser) -
     assert updated["address_line1"] == created["address_line1"], "untouched field must be unchanged"
 
 
+async def test_create_property_writes_an_audit_row(org_user: OrgUser) -> None:
+    """Creating a property is a state change to money and compliance data.
+
+    ``finance_cost_classification`` decides which side of the Section 24
+    finance-cost restriction a property's interest falls (money), and
+    ``epc_rating``/``epc_expiry``/``licensing_flag`` are compliance data --
+    both inside the spec's "audit every state change to money or compliance
+    data".
+    """
+    created = await create_property(org_user, epc_rating="C")
+
+    creations = [
+        row for row in await audit_rows(org_user.org_id) if row["action"] == "property.created"
+    ]
+    assert len(creations) == 1, creations
+    assert creations[0]["actor_type"] == "user"
+    assert creations[0]["actor_id"] == org_user.user_id
+    assert creations[0]["before"] is None, "a creation has no prior state"
+    assert created["id"] in creations[0]["after"]
+    assert '"finance_cost_classification": "residential"' in creations[0]["after"]
+    assert '"epc_rating": "C"' in creations[0]["after"]
+
+
+async def test_patch_property_writes_an_audit_row_with_before_and_after(
+    org_user: OrgUser,
+) -> None:
+    """A property update records what it changed from as well as to."""
+    created = await create_property(
+        org_user, epc_rating="E", finance_cost_classification="residential"
+    )
+    resp = await as_user(
+        org_user,
+        "PATCH",
+        f"/properties/{created['id']}",
+        {"epc_rating": "B", "finance_cost_classification": "non_residential"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    updates = [
+        row for row in await audit_rows(org_user.org_id) if row["action"] == "property.updated"
+    ]
+    assert len(updates) == 1, updates
+    assert updates[0]["actor_type"] == "user"
+    assert updates[0]["actor_id"] == org_user.user_id
+    assert '"epc_rating": "E"' in updates[0]["before"]
+    assert '"epc_rating": "B"' in updates[0]["after"]
+    assert '"finance_cost_classification": "residential"' in updates[0]["before"]
+    assert '"finance_cost_classification": "non_residential"' in updates[0]["after"]
+
+
 async def test_patch_property_with_no_fields_is_422(org_user: OrgUser) -> None:
     """An empty patch is a client mistake, not a no-op 200."""
     created = await create_property(org_user)
@@ -509,33 +559,55 @@ async def test_put_ownership_accepts_a_sole_owner_at_100(org_user: OrgUser) -> N
     assert [row["ownership_percentage"] for row in await ownership_rows(prop["id"])] == [
         Decimal("100.00")
     ]
-    assert '"percentage": "100.00"' in (await audit_rows(org_user.org_id))[-1]["after"]
+    # Filtered by action rather than read as [-1]: `audit_rows` orders by
+    # `created_at, action`, and this test's property.created / entity.created
+    # rows can tie on `created_at`, at which point the alphabetical secondary
+    # sort decides the last element.
+    replacements = [
+        row for row in await audit_rows(org_user.org_id) if row["action"] == "ownership.replaced"
+    ]
+    assert len(replacements) == 1, replacements
+    assert '"percentage": "100.00"' in replacements[0]["after"]
 
 
 async def test_put_ownership_sums_json_numbers_exactly(org_user: OrgUser) -> None:
-    """Thirds sent as JSON numbers must sum to exactly 100 -- Decimal, never float.
+    """Shares sent as JSON numbers must parse as Decimal, never through float.
 
-    ``33.33 + 33.33 + 33.34`` is 100 in decimal and 99.99999999999999 in
-    binary floating point. This figure drives penny-exact apportionment in
-    ``src/core/splits.py``, so the parse has to be exact: pinned here
+    ``0.01 + 64.04 + 35.95`` is exactly 100 in decimal but 100.00000000000001
+    in binary floating point. These figures drive penny-exact apportionment
+    in ``src/core/splits.py``, so the parse has to be exact -- pinned here
     because the JSON-number path (what the Flutter client will send) is the
     one where a float slip would hide.
+
+    **The discriminating assertion is the 200, not the sum.** Were the
+    values to pass through ``float`` on their way to
+    :class:`~decimal.Decimal`, 0.01 would arrive as
+    ``0.010000000000000000208...`` -- far more than the two decimal places
+    ``OwnershipShare.percentage`` permits -- and all three shares would be
+    422s. Getting a 200 at all is the proof that pydantic built each
+    ``Decimal`` from the raw JSON text. The sum assertion then makes the
+    float counterexample concrete.
+
+    (Do not restore the previous ``33.33 + 33.33 + 33.34`` payload: those
+    three floats happen to sum to exactly ``100.0``, so they demonstrate
+    nothing about float error.)
     """
     prop = await create_property(org_user)
-    entities = [await create_entity(org_user, name=f"Third {index}") for index in range(3)]
+    entities = [await create_entity(org_user, name=f"Share {index}") for index in range(3)]
 
     resp = await as_user(
         org_user,
         "PUT",
         f"/properties/{prop['id']}/ownership",
         [
-            {"entity_id": entities[0]["id"], "percentage": 33.33},
-            {"entity_id": entities[1]["id"], "percentage": 33.33},
-            {"entity_id": entities[2]["id"], "percentage": 33.34},
+            {"entity_id": entities[0]["id"], "percentage": 0.01},
+            {"entity_id": entities[1]["id"], "percentage": 64.04},
+            {"entity_id": entities[2]["id"], "percentage": 35.95},
         ],
     )
     assert resp.status_code == 200, resp.text
     assert sum(Decimal(share["percentage"]) for share in resp.json()) == Decimal(100)
+    assert 0.01 + 64.04 + 35.95 != 100.0, "the float hazard this test stands for must be real"
 
 
 async def test_put_ownership_replaces_the_prior_set_wholesale(org_user: OrgUser) -> None:
@@ -657,34 +729,69 @@ async def test_put_ownership_rejects_the_same_entity_twice(org_user: OrgUser) ->
     assert await ownership_rows(prop["id"]) == []
 
 
-@pytest.mark.parametrize("percentage", ["0.00", "-10.00", "100.01", "33.333"])
+@pytest.mark.parametrize(
+    "percentages",
+    [
+        ["0.00", "100.00"],
+        ["-10.00", "55.00", "55.00"],
+        ["33.333", "66.667"],
+    ],
+)
 async def test_put_ownership_rejects_out_of_range_percentages(
-    org_user: OrgUser, percentage: str
+    org_user: OrgUser, percentages: list[str]
 ) -> None:
     """Per-row bounds are enforced in the API, ahead of the CHECK constraint.
 
-    ``ownership_percentage numeric(5,2) check (> 0 and <= 100)`` means 0,
-    negatives and >100 die at the database as a 500; a third decimal place
-    would be silently rounded into a different number. All four are 422s.
+    **Every payload here sums to exactly 100**, which is the whole point: a
+    set that misses the sum is refused by the sum rule whatever the per-row
+    bounds say, so a one-share payload would pass this test with the bounds
+    deleted. Pinning the sum to 100 leaves the per-row bound as the only
+    thing that can reject it. Each case was checked to fail when its guard
+    is removed:
+
+    * ``["0.00", "100.00"]`` and ``["-10.00", "55.00", "55.00"]`` pin
+      ``gt=0``. Without it, ``ownership_percentage numeric(5,2) check (> 0
+      and <= 100)`` fires as an unhandled ``CheckViolationError`` -- a 500,
+      precisely the trap the API-side bound exists to prevent.
+    * ``["33.333", "66.667"]`` pins ``decimal_places=2``, the worst of the
+      three failures. Without it the request **succeeds with a 200** and
+      ``numeric(5,2)`` stores 33.33/66.67 -- money silently altered, with no
+      error raised anywhere.
+
+    ``le=100`` has no case here because none can exist: see
+    :class:`~src.api.routers.portfolio.OwnershipShare`, where the bound
+    lives. With ``gt=0`` in force and the sum pinned to 100, no single share
+    can exceed 100.
     """
     prop = await create_property(org_user)
-    entity = await create_entity(org_user)
-
-    resp = await as_user(
-        org_user,
-        "PUT",
-        f"/properties/{prop['id']}/ownership",
-        [{"entity_id": entity["id"], "percentage": percentage}],
+    shares = [
+        {
+            "entity_id": (await create_entity(org_user, name=f"Owner {index}"))["id"],
+            "percentage": percentage,
+        }
+        for index, percentage in enumerate(percentages)
+    ]
+    assert sum(Decimal(percentage) for percentage in percentages) == Decimal(100), (
+        "these payloads only test the per-row bound while their sum is exactly 100"
     )
+
+    resp = await as_user(org_user, "PUT", f"/properties/{prop['id']}/ownership", shares)
     assert resp.status_code == 422, resp.text
     assert await ownership_rows(prop["id"]) == []
 
 
 async def test_put_ownership_rejects_an_empty_list(org_user: OrgUser) -> None:
-    """Removing every owner would leave the property's income unattributable."""
+    """Removing every owner would leave the property's income unattributable.
+
+    The ``too_short`` assertion pins *which* rule refuses this. An empty set
+    also sums to 0, so without it the test passes whether ``Body(min_length=1)``
+    is present or not, and the 422 it names would silently become the
+    sum-to-100 one.
+    """
     prop = await create_property(org_user)
     resp = await as_user(org_user, "PUT", f"/properties/{prop['id']}/ownership", [])
     assert resp.status_code == 422, resp.text
+    assert "too_short" in resp.text, f"the empty list must be refused by min_length: {resp.text}"
 
 
 async def test_put_ownership_rejects_an_unknown_entity_id(org_user: OrgUser) -> None:
@@ -752,7 +859,13 @@ async def test_rejected_ownership_payloads_leave_the_prior_set_untouched(
         ],
         [{"entity_id": str(uuid.uuid4()), "percentage": "100.00"}],
         [{"entity_id": foreign["id"], "percentage": "100.00"}],
-        [{"entity_id": other["id"], "percentage": "0.00"}],
+        # Sums to exactly 100 so that `gt=0` is the only rule that can
+        # refuse it -- a lone `{"percentage": "0.00"}` would be caught by
+        # the sum rule instead, testing nothing about the per-row bound.
+        [
+            {"entity_id": owner["id"], "percentage": "0.00"},
+            {"entity_id": other["id"], "percentage": "100.00"},
+        ],
         [],
     ]
     for payload in rejected_payloads:
@@ -825,6 +938,45 @@ async def test_org_a_cannot_patch_org_bs_property(make_org_user) -> None:
             "select address_line1 from properties where id = $1", uuid.UUID(theirs["id"])
         )
     assert address == "Org B address"
+    assert [row["action"] for row in await audit_rows(org_b.org_id)] == ["property.created"], (
+        "a refused cross-org PATCH must not write an audit row"
+    )
+
+
+@pytest.mark.parametrize("kind", ["entity", "property"])
+async def test_a_cross_org_404_is_identical_to_a_nonexistent_one(make_org_user, kind: str) -> None:
+    """Reading another org's row must be indistinguishable from reading nothing.
+
+    The 404 body is the last channel through which a caller could confirm
+    that an id it guessed is real: if "belongs to someone else" read even
+    slightly differently from "no such row", the endpoint would be an
+    existence oracle over every other tenant's ids. ``_not_found`` is the
+    single source of both, so they are identical by construction -- this
+    pins that, since the construction is one refactor away from changing.
+
+    Compared per resource kind, not across kinds: the message interpolates
+    "entity"/"property", so an entity 404 and a property 404 legitimately
+    differ. Mirrors the ownership-422 equivalent in
+    ``test_org_a_cannot_attach_org_bs_entity_to_its_own_property``.
+    """
+    org_a = await make_org_user()
+    org_b = await make_org_user()
+    if kind == "entity":
+        theirs = await create_entity(org_b, name="Org B entity")
+        path = "/entities"
+    else:
+        theirs = await create_property(org_b, address_line1="Org B address")
+        path = "/properties"
+
+    cross_org = await as_user(org_a, "GET", f"{path}/{theirs['id']}")
+    unknown = str(uuid.uuid4())
+    nonexistent = await as_user(org_a, "GET", f"{path}/{unknown}")
+
+    assert cross_org.status_code == nonexistent.status_code == 404, cross_org.text
+    assert cross_org.text.replace(theirs["id"], "X") == nonexistent.text.replace(unknown, "X"), (
+        "another org's row and a non-existent one must be reported identically, "
+        "or the 404 confirms which ids exist"
+    )
 
 
 async def test_org_a_cannot_set_ownership_on_org_bs_property(make_org_user) -> None:
