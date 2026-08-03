@@ -87,6 +87,7 @@
 **NEXT ACTIONS, in order:**
 1. Task 13b **Step 4 fix round** — spec is fully written in the plan (4a–4d), no re-derivation needed. Also amend Step 2's wording, which caused 4a by reading as an exhaustive list.
 2. Then stage-2 **code-quality review** of 13b. Do NOT tick 13b until both stages pass. (Stage 1 is ❌, so stage 2 has not been dispatched — order matters.)
+   > **SUPERSEDED 2026-07-30 — do not read this line as current status.** Stage 2 *was* subsequently dispatched and returned ⚠️ APPROVED WITH NITS; its findings are plan Step 6 `6a`–`6g`, all since implemented (`f2ee07d`). **Both stages have passed.** Annotated on 2026-08-03 because I read this line, cached "stage 2 is outstanding", and repeated it to Mahmud four or five times across a session without re-checking the plan. Answer "what is still outstanding?" from the plan's checkboxes and outcome blocks, never from a handoff note — notes are true when written and are silently superseded by the next session's work.
 3. Ask Mahmud the `_PatchBody` null-clearing question; it is a product call, not an engineering one.
 4. Then Task 14 (imports endpoint). Step 0's storage groundwork is already researched and pinned (`ab2640b`) — measured baseline plus the `::uuid` policy-cast trap.
 
