@@ -118,25 +118,41 @@ class _PatchBody(_StrictBody):
     ``{}`` is refused rather than treated as a no-op: returning 200 would
     tell a caller its (mistaken) update had been applied.
 
-    **Why nullability is spelled out rather than inferred.** Every field is
-    uniformly typed ``X | None`` -- that is how "absent" is expressed -- so
+    **Why nullability is written out per body.** Every field is uniformly
+    typed ``X | None`` -- that is how "absent" is expressed -- so
     ``EntityUpdate.name`` and ``EntityUpdate.prs_registration_number`` look
-    identical to pydantic, while ``entities.name`` is NOT NULL and
+    identical *to pydantic*, while ``entities.name`` is NOT NULL and
     ``prs_registration_number`` is not. Nulling the first has to be a 422;
     nulling the second has to succeed. Subclasses therefore name their NOT
-    NULL columns explicitly in ``_NOT_NULLABLE``. It is a deliberately
-    greppable statement about the schema rather than a typing trick, and
-    ``test_patch_property_cannot_null_a_not_null_column`` /
-    ``..._entity_...`` pin every name in it -- without them a wrong or empty
-    set would send a null to Postgres and turn a 422 into a 500.
+    NULL columns in ``_NOT_NULLABLE``: greppable, and it reads as a
+    statement about the schema rather than a typing trick.
+
+    The mapped models *do* carry the authoritative answer
+    (``models.Property.__table__.columns[name].nullable``), so the list is a
+    convenience, not a necessity -- and it is **checked against that
+    authority** by ``test_not_nullable_is_exactly_what_the_schema_says``
+    rather than trusted. Copy that test along with this pattern; see its
+    docstring for the three failure modes it closes, one of which is
+    invisible to every other test in the file.
+
+    **A column default does not make a null safe.** ``properties.country``
+    is NOT NULL ``default 'GB'``, but an explicit ``NULL`` in an ``UPDATE``
+    is stored as NULL rather than falling back to the default -- so
+    defaulted columns belong in ``_NOT_NULLABLE`` like any other. Measured:
+    dropping ``country`` from the set fails
+    ``test_patch_property_cannot_null_a_not_null_column[country]`` with an
+    ``IntegrityError``, and nothing else.
 
     :cvar _NOT_NULLABLE: field names whose column is NOT NULL. Empty here;
         each concrete body overrides it.
     """
 
-    #: Overridden per body. Empty on the base so that a subclass which
-    #: forgets to declare it gets database errors in its own tests rather
-    #: than silently inheriting another body's column list.
+    #: Overridden per body. The empty default is just a default -- it is not
+    #: a guard, and a subclass that forgets to declare its own would refuse
+    #: nothing. The guard is
+    #: ``test_not_nullable_is_exactly_what_the_schema_says``, which derives
+    #: the expected set from the mapped columns, so a body whose set is
+    #: absent, incomplete or misspelled fails there.
     _NOT_NULLABLE: ClassVar[frozenset[str]] = frozenset()
 
     @model_validator(mode="after")

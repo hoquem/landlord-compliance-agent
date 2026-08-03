@@ -50,6 +50,7 @@ from scripts.seed_org import seed_org
 from src.api.main import app
 from src.api.routers import portfolio
 from src.core.splits import split_amount
+from src.db import models
 from tests.api.conftest import AuthUser, OrgUser, db, mint_token
 
 # ---------------------------------------------------------------------------
@@ -692,6 +693,44 @@ async def test_clearing_an_entity_field_writes_an_audit_row_showing_the_null(
     assert '"prs_registration_number": null' in updates[0]["after"]
 
 
+@pytest.mark.parametrize(
+    ("body", "table"),
+    [
+        (portfolio.EntityUpdate, models.Entity.__table__),
+        (portfolio.PropertyUpdate, models.Property.__table__),
+    ],
+    ids=["entity", "property"],
+)
+async def test_not_nullable_is_exactly_what_the_schema_says(
+    body: type[portfolio._PatchBody], table: object
+) -> None:
+    """``_NOT_NULLABLE`` is derived-checked against the mapped columns.
+
+    The lists in the router and in ``NOT_NULL_*_FIELDS`` above are both
+    hand-maintained, and the per-field tests only pin the names that are
+    *already in* the set -- they cannot notice a name that was never added,
+    or one misspelled in both places at once. That second case is the nasty
+    one: a typo'd name is a silent no-op in the router (nothing checks that
+    a name in the set is even a field), while the matching typo in the test
+    list makes the test pass for the wrong reason, because
+    ``extra="forbid"`` turns the unknown key into a 422 that still contains
+    the field name. Green suite, live 500.
+
+    One equality closes all three holes, because ``expected`` is built from
+    the body's own fields:
+
+    * a NOT NULL column missing from the set -- it is in ``expected``;
+    * a nullable column wrongly in the set -- it is not in ``expected``;
+    * a name that is not a field at all -- it cannot be in ``expected``.
+
+    Model-vs-database drift is a different question, already guarded by
+    ``tests/db/test_models_roundtrip.py`` and ``tests/db/test_schema.py``;
+    this test's chain is schema -> models -> body.
+    """
+    expected = {name for name in body.model_fields if not table.columns[name].nullable}
+    assert body._NOT_NULLABLE == expected
+
+
 @pytest.mark.parametrize("field", NOT_NULL_PROPERTY_FIELDS)
 async def test_patch_property_cannot_null_a_not_null_column(
     org_user: OrgUser, field: str
@@ -700,8 +739,12 @@ async def test_patch_property_cannot_null_a_not_null_column(
 
     This is what stops "null clears it" from becoming "null reaches Postgres
     as an IntegrityError". Every NOT NULL column is named individually,
-    because the model cannot infer nullability: each field is uniformly typed
-    ``X | None`` so the API can express "absent".
+    because the *pydantic body* cannot infer nullability: each field is
+    uniformly typed ``X | None`` so the API can express "absent". The mapped
+    column does know, and
+    ``test_not_nullable_is_exactly_what_the_schema_says`` is what holds the
+    two in agreement -- these per-name cases only pin the names that are
+    already in the set.
     """
     created = await create_property(org_user)
     resp = await as_user(org_user, "PATCH", f"/properties/{created['id']}", {field: None})
