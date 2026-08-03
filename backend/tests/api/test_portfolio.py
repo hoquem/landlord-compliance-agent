@@ -326,17 +326,13 @@ async def test_patch_entity_with_no_fields_is_422(org_user: OrgUser) -> None:
     assert resp.status_code == 422, resp.text
 
 
-async def test_patch_entity_cannot_null_a_field(org_user: OrgUser) -> None:
-    """Explicit ``null`` is refused loudly rather than silently ignored or 500-ing.
-
-    ``entities.name`` is NOT NULL, so a swallowed null would either be
-    dropped without telling the caller or reach the database as an
-    IntegrityError. MVP has no "clear this field" operation; asking for one
-    gets a 422 that says so.
-    """
-    entity = await create_entity(org_user)
-    resp = await as_user(org_user, "PATCH", f"/entities/{entity['id']}", {"name": None})
-    assert resp.status_code == 422, resp.text
+# ``test_patch_entity_cannot_null_a_field`` stood here. It sent
+# ``{"name": null}`` and asserted a 422 -- which
+# ``test_patch_entity_cannot_null_a_not_null_column[name]`` now does
+# identically, alongside ``tax_regime`` and ``quarter_basis``, and it also
+# asserts the 422 names the field. Removed rather than left as a duplicate
+# carrying a docstring ("MVP has no 'clear this field' operation") that Step 5
+# made false. Coverage strictly increased.
 
 
 async def test_patch_unknown_entity_is_404(org_user: OrgUser) -> None:
@@ -516,6 +512,210 @@ async def test_patch_unknown_property_is_404(org_user: OrgUser) -> None:
     """Patching an id that exists nowhere is a 404, not a silent 200."""
     resp = await as_user(org_user, "PATCH", f"/properties/{uuid.uuid4()}", {"epc_rating": "A"})
     assert resp.status_code == 404, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Clearing nullable fields -- RFC 7386 (JSON Merge Patch) semantics.
+#
+# Three states have to stay distinguishable per field: key absent leaves the
+# stored value alone, key present and null clears it, key present with a value
+# sets it. Every clearable field is covered separately rather than one field
+# standing in for the rest, because the failure this guards against is a
+# per-field omission -- `bedroom_count` was itself missed when Step 5 was
+# first specified.
+#
+# A mis-entered EPC expiry is a compliance problem, so "correctable but never
+# clearable" was not a tenable API: short of direct database access the wrong
+# value was stuck.
+# ---------------------------------------------------------------------------
+
+#: The nullable ``properties`` columns, with a sample value for each.
+CLEARABLE_PROPERTY_FIELDS = [
+    ("address_line2", "Flat 2"),
+    ("epc_rating", "C"),
+    ("epc_expiry", "2031-05-04"),
+    ("bedroom_count", 3),
+]
+
+#: The nullable ``entities`` columns, with a sample value for each.
+CLEARABLE_ENTITY_FIELDS = [
+    ("prs_registration_number", "PRS-123456"),
+    ("prs_registered_at", "2025-04-06"),
+]
+
+#: ``properties`` columns that are NOT NULL: nulling them stays a 422.
+NOT_NULL_PROPERTY_FIELDS = [
+    "address_line1",
+    "city",
+    "postcode",
+    "country",
+    "finance_cost_classification",
+    "licensing_flag",
+]
+
+#: ``entities`` columns that are NOT NULL: nulling them stays a 422.
+NOT_NULL_ENTITY_FIELDS = ["name", "tax_regime", "quarter_basis"]
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_PROPERTY_FIELDS)
+async def test_patch_property_clears_a_nullable_field_when_explicitly_null(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """An explicit ``null`` wipes a nullable property field."""
+    created = await create_property(org_user, **{field: value})
+    assert created[field] is not None, "arrange failed: the field must start set"
+
+    resp = await as_user(org_user, "PATCH", f"/properties/{created['id']}", {field: None})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] is None
+    async with db() as conn:
+        stored = await conn.fetchval(
+            f"select {field} from properties where id = $1", uuid.UUID(created["id"])
+        )
+    assert stored is None, "the response must not claim a clear the database did not make"
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_PROPERTY_FIELDS)
+async def test_patch_property_leaves_a_nullable_field_alone_when_omitted(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """Omitting the key is not the same as sending null: the value survives."""
+    created = await create_property(org_user, **{field: value})
+
+    resp = await as_user(
+        org_user, "PATCH", f"/properties/{created['id']}", {"address_line1": "Somewhere Else"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] == created[field]
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_PROPERTY_FIELDS)
+async def test_patch_property_sets_a_nullable_field_to_a_value(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """A cleared field can be filled in again -- clearing is not one-way."""
+    created = await create_property(org_user)
+    assert created[field] is None, "arrange failed: the field must start unset"
+
+    resp = await as_user(org_user, "PATCH", f"/properties/{created['id']}", {field: value})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] == value
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_ENTITY_FIELDS)
+async def test_patch_entity_clears_a_nullable_field_when_explicitly_null(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """The entity body is not assumed symmetric with the property one -- checked."""
+    created = await create_entity(org_user, **{field: value})
+    assert created[field] is not None, "arrange failed: the field must start set"
+
+    resp = await as_user(org_user, "PATCH", f"/entities/{created['id']}", {field: None})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] is None
+    async with db() as conn:
+        stored = await conn.fetchval(
+            f"select {field} from entities where id = $1", uuid.UUID(created["id"])
+        )
+    assert stored is None, "the response must not claim a clear the database did not make"
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_ENTITY_FIELDS)
+async def test_patch_entity_leaves_a_nullable_field_alone_when_omitted(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """Omitting the key leaves the entity's stored value alone."""
+    created = await create_entity(org_user, **{field: value})
+
+    resp = await as_user(org_user, "PATCH", f"/entities/{created['id']}", {"name": "Renamed"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] == created[field]
+
+
+@pytest.mark.parametrize(("field", "value"), CLEARABLE_ENTITY_FIELDS)
+async def test_patch_entity_sets_a_nullable_field_to_a_value(
+    org_user: OrgUser, field: str, value: object
+) -> None:
+    """A cleared entity field can be filled in again."""
+    created = await create_entity(org_user)
+    assert created[field] is None, "arrange failed: the field must start unset"
+
+    resp = await as_user(org_user, "PATCH", f"/entities/{created['id']}", {field: value})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] == value
+
+
+async def test_clearing_a_property_field_writes_an_audit_row_showing_the_null(
+    org_user: OrgUser,
+) -> None:
+    """Clearing compliance data is audited, and the null is visible in ``after``.
+
+    The cleared key must be *present and null* rather than omitted: a reader
+    reconstructing state from the trail cannot tell an omitted key from an
+    unchanged one.
+    """
+    created = await create_property(org_user, epc_expiry="2031-05-04")
+
+    resp = await as_user(org_user, "PATCH", f"/properties/{created['id']}", {"epc_expiry": None})
+    assert resp.status_code == 200, resp.text
+
+    updates = [
+        row for row in await audit_rows(org_user.org_id) if row["action"] == "property.updated"
+    ]
+    assert len(updates) == 1, updates
+    assert '"epc_expiry": "2031-05-04"' in updates[0]["before"]
+    assert '"epc_expiry": null' in updates[0]["after"]
+
+
+async def test_clearing_an_entity_field_writes_an_audit_row_showing_the_null(
+    org_user: OrgUser,
+) -> None:
+    """Clearing a PRS registration is audited the same way."""
+    created = await create_entity(org_user, prs_registration_number="PRS-123456")
+
+    resp = await as_user(
+        org_user, "PATCH", f"/entities/{created['id']}", {"prs_registration_number": None}
+    )
+    assert resp.status_code == 200, resp.text
+
+    updates = [
+        row for row in await audit_rows(org_user.org_id) if row["action"] == "entity.updated"
+    ]
+    assert len(updates) == 1, updates
+    assert '"prs_registration_number": "PRS-123456"' in updates[0]["before"]
+    assert '"prs_registration_number": null' in updates[0]["after"]
+
+
+@pytest.mark.parametrize("field", NOT_NULL_PROPERTY_FIELDS)
+async def test_patch_property_cannot_null_a_not_null_column(
+    org_user: OrgUser, field: str
+) -> None:
+    """Null still refused where the column is NOT NULL -- a 422, never a 500.
+
+    This is what stops "null clears it" from becoming "null reaches Postgres
+    as an IntegrityError". Every NOT NULL column is named individually,
+    because the model cannot infer nullability: each field is uniformly typed
+    ``X | None`` so the API can express "absent".
+    """
+    created = await create_property(org_user)
+    resp = await as_user(org_user, "PATCH", f"/properties/{created['id']}", {field: None})
+    assert resp.status_code == 422, resp.text
+    assert field in resp.text, "the 422 must name the field it refused"
+
+
+@pytest.mark.parametrize("field", NOT_NULL_ENTITY_FIELDS)
+async def test_patch_entity_cannot_null_a_not_null_column(org_user: OrgUser, field: str) -> None:
+    """Null still refused on the entity's NOT NULL columns."""
+    created = await create_entity(org_user)
+    resp = await as_user(org_user, "PATCH", f"/entities/{created['id']}", {field: None})
+    assert resp.status_code == 422, resp.text
+    assert field in resp.text, "the 422 must name the field it refused"
 
 
 # ---------------------------------------------------------------------------

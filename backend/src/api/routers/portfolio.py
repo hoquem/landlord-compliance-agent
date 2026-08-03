@@ -62,7 +62,7 @@ import datetime
 import uuid
 from collections import Counter
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -104,42 +104,57 @@ class _StrictBody(BaseModel):
 
 
 class _PatchBody(_StrictBody):
-    """Base for PATCH bodies: partial, but neither empty nor nulling.
+    """Base for PATCH bodies: JSON Merge Patch (RFC 7386) semantics.
 
-    Every field is optional so that an absent one means "leave it alone".
-    That makes two payloads ambiguous unless they are refused outright:
+    Three states per field, and all three have to stay distinguishable:
 
-    * ``{}`` -- nothing to do. Returning 200 would tell the caller its
-      (mistaken) update had been applied.
-    * ``{"field": null}`` -- refused for every field, whatever its column's
-      nullability. On a NOT NULL column a null would reach Postgres as an
-      IntegrityError (a 500); on a nullable one it would have to mean "clear
-      this field". Today neither is offered, and a 422 naming the fields
-      beats guessing between them.
+    * **key absent** -- leave the stored value alone. Every field is
+      optional, and the handlers dump with ``exclude_unset=True``, so an
+      absent key never reaches the ``setattr`` loop.
+    * **key present and ``null``** -- clear the field. Allowed only where
+      the column is nullable; see ``_NOT_NULLABLE`` below.
+    * **key present with a value** -- set it.
 
-    **Pending change, so that this does not quietly become false:** the
-    nullable half is decided and not yet built. Step 5 of Task 13b makes
-    ``null`` *clear* a nullable field (``address_line2``, ``epc_rating``,
-    ``epc_expiry``, ``bedroom_count``, ``prs_registration_number``,
-    ``prs_registered_at``), leaving this blanket refusal only for the NOT
-    NULL columns. Described here as it behaves today, with the direction of
-    travel named. ``test_patch_entity_cannot_null_a_field`` is the only test
-    pinning today's refusal -- there is no ``PATCH /properties`` equivalent,
-    so the property side of this rule is asserted here and unenforced; Step
-    5b is where per-field coverage arrives.
+    ``{}`` is refused rather than treated as a no-op: returning 200 would
+    tell a caller its (mistaken) update had been applied.
+
+    **Why nullability is spelled out rather than inferred.** Every field is
+    uniformly typed ``X | None`` -- that is how "absent" is expressed -- so
+    ``EntityUpdate.name`` and ``EntityUpdate.prs_registration_number`` look
+    identical to pydantic, while ``entities.name`` is NOT NULL and
+    ``prs_registration_number`` is not. Nulling the first has to be a 422;
+    nulling the second has to succeed. Subclasses therefore name their NOT
+    NULL columns explicitly in ``_NOT_NULLABLE``. It is a deliberately
+    greppable statement about the schema rather than a typing trick, and
+    ``test_patch_property_cannot_null_a_not_null_column`` /
+    ``..._entity_...`` pin every name in it -- without them a wrong or empty
+    set would send a null to Postgres and turn a 422 into a 500.
+
+    :cvar _NOT_NULLABLE: field names whose column is NOT NULL. Empty here;
+        each concrete body overrides it.
     """
 
+    #: Overridden per body. Empty on the base so that a subclass which
+    #: forgets to declare it gets database errors in its own tests rather
+    #: than silently inheriting another body's column list.
+    _NOT_NULLABLE: ClassVar[frozenset[str]] = frozenset()
+
     @model_validator(mode="after")
-    def _reject_empty_and_null_updates(self) -> "_PatchBody":
-        """Refuse an empty patch, or one asking to null a field.
+    def _reject_empty_patch_and_illegal_nulls(self) -> "_PatchBody":
+        """Refuse an empty patch, or a null aimed at a NOT NULL column.
 
         :raises ValueError: (a 422 through FastAPI) if no field was
-            supplied, or if any supplied field was explicitly ``null``.
+            supplied, or if a supplied field was explicitly ``null`` while
+            its column is NOT NULL.
         :returns: the validated model.
         """
         if not self.model_fields_set:
             raise ValueError("Name at least one field to update.")
-        nulled = sorted(field for field in self.model_fields_set if getattr(self, field) is None)
+        nulled = sorted(
+            field
+            for field in self.model_fields_set
+            if getattr(self, field) is None and field in self._NOT_NULLABLE
+        )
         if nulled:
             raise ValueError(
                 f"Fields cannot be set to null: {', '.join(nulled)}. "
@@ -162,7 +177,13 @@ class EntityCreate(_StrictBody):
 
 
 class EntityUpdate(_PatchBody):
-    """Body of ``PATCH /entities/{entity_id}``."""
+    """Body of ``PATCH /entities/{entity_id}``.
+
+    ``prs_registration_number`` and ``prs_registered_at`` are the clearable
+    pair; the rest are NOT NULL in ``0001_core.sql``.
+    """
+
+    _NOT_NULLABLE: ClassVar[frozenset[str]] = frozenset({"name", "tax_regime", "quarter_basis"})
 
     name: str | None = Field(default=None, min_length=1)
     tax_regime: TaxRegime | None = None
@@ -205,7 +226,23 @@ class PropertyCreate(_StrictBody):
 
 
 class PropertyUpdate(_PatchBody):
-    """Body of ``PATCH /properties/{property_id}``."""
+    """Body of ``PATCH /properties/{property_id}``.
+
+    ``address_line2``, ``epc_rating``, ``epc_expiry`` and ``bedroom_count``
+    are the clearable four -- a mis-entered EPC expiry is a compliance
+    problem and has to be removable, not merely overwritable.
+    """
+
+    _NOT_NULLABLE: ClassVar[frozenset[str]] = frozenset(
+        {
+            "address_line1",
+            "city",
+            "postcode",
+            "country",
+            "finance_cost_classification",
+            "licensing_flag",
+        }
+    )
 
     address_line1: str | None = Field(default=None, min_length=1)
     address_line2: str | None = None
