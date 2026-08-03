@@ -105,6 +105,29 @@ An explicit `null` in a PATCH body wipes the field (`epc_rating`, `epc_expiry`, 
 
 **Working method that has been earning its keep:** ask subagents to push back with evidence rather than comply. Three confident-but-wrong claims surfaced today — one reviewer's mutation outcome (twice) and one of mine propagated into a plan constraint — and in every case the implementer who challenged it was right. Verify the discriminating command yourself before pinning anything. First task where the RLS-bypass constraint bites: brief requires an API-level two-org isolation test AND a filter-removal probe proving that test has teeth. Also pinned the three schema traps (0% ownership dies at the DB CHECK; duplicate entity_id hits the unique constraint; composite FKs firing means my filtering was wrong) and Decimal-not-float for the sum-to-100.
 
+## Session 2026-08-02/03 — unblocking Task 19 prerequisites (PAUSED mid-flight)
+
+Mahmud chose to clear the three long-standing inputs (Google OAuth, bank list, Supabase cloud) ahead of Task 13b Step 5. **Step 5 remains unticked and 13b remains unticked** — this is a deliberate detour, not a completion.
+
+**Decisions taken:**
+- Supabase cloud: **create and park** (project exists, local stack stays the dev loop), **Mahmud creates it in the dashboard**, region **London / eu-west-2** for UK bank + HMRC data residency. Cut-over is a separate future task. Project ref not yet supplied.
+- Google OAuth credentials live in the **repo `.env` only**; the two exports are to be removed from `~/.zshrc`.
+- The ambient client is **another project's** — a fresh client is to be created for this app.
+
+**Config landed (uncommitted at time of writing):**
+- `supabase/config.toml`: `[auth.external.google]` enabled, `client_id`/`secret` via `env()`, `skip_nonce_check = true` (required for local Google sign-in, per the stock `[auth.external.apple]` comment).
+- `additional_redirect_urls` corrected from the stock `https://127.0.0.1:3000` — **no local Flutter dev server serves https**, so Task 19's redirect would have failed. Now lists `http://127.0.0.1:3000` and `http://localhost:3000` (matched exactly; Chrome launches on `localhost`, `site_url` uses `127.0.0.1`).
+- `.env.example` + `.env` gained `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`.
+- 208 tests green after the change and a stack restart.
+
+**MEASURED TRAP — process env silently outranks the repo `.env`.** The plan assumed the CLI reads the repo-root `.env` for `env()` substitution. It does — but only when the variable is *absent* from the process environment. Discriminating test, both halves run: with `~/.zshrc`'s exports live, `/auth/v1/authorize?provider=google` redirected to Google with the **ambient** client id; re-running `supabase start` under `env -u GOOGLE_OAUTH_CLIENT_ID -u GOOGLE_OAUTH_CLIENT_SECRET` redirected with the **`.env`** value. So a correctly-filled repo `.env` can be silently overridden by a dotfile, and `supabase status` does **not** validate the auth block at all — it reported healthy in both states. The live-GoTrue check is the only honest one: `curl -s -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:54321/auth/v1/authorize?provider=google"`.
+- **Consequence for Mahmud:** deleting the exports from `~/.zshrc` will break whichever other project depends on them; move them into that project's own `.env` first.
+- **Current live-stack state:** the running GoTrue still holds the throwaway probe client id. Harmless (no Google sign-in exists yet) and deliberately not "fixed" — restarting with `enabled = true` and an empty `client_id` risks the stack failing to boot, which was not worth gambling a green suite on for cosmetics. Next restart with real creds settles it.
+
+**Also spotted, not acted on:** `.env` has no `CATEGORISER_MODEL`, though `.env.example` documents it as required and the flow fails loudly without it. The suite passes because tests set it themselves. Flagged rather than silently patched.
+
+**Still outstanding on this detour:** Supabase project ref; the Google client itself (consent screen walkthrough delivered, client creation waits on the ref so both redirect URIs land on one client); the bank list (bank, owner, exact CSV header row, 3–5 sanitised rows per account — `backend/tests/fixtures/statements/` is tracked, so real account numbers/balances/counterparties must not go in).
+
 ## Session 2026-07-28
 - Created planning files
 - Dispatched 3 parallel research agents (property, investments, AI business)
