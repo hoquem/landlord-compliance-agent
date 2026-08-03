@@ -123,6 +123,29 @@ An explicit `null` in a PATCH body wipes the field (`epc_rating`, `epc_expiry`, 
     - **The skill's own methodology was not fully followed, deliberately.** `superpowers:writing-skills` requires baseline-testing a new skill by dispatching subagents *without* it and recording their rationalizations. Session instructions forbid spawning agents unless Mahmud asks, so it was validated instead by running `audit` mode against this repo for real. That is application evidence, not the pressure-testing the methodology wants. **Offer Mahmud the subagent baseline test if he wants the skill hardened.**
   - Assessment against the paper: TDD (§3.2.2) and small-batch delivery (§3.2.4) are **already ahead of the paper's baseline** here — mutation-testing every new guard is stronger than anything §3.2.2 specifies. The real gap is the **domain layer: there is no `docs/domain/`, no glossary at all.** Three live collisions for it to resolve: `entity` (ownership entity vs the generic sense in `scoping.get_owned_or_404`/`not_found(kind=...)`), `org` vs `entity` (tenant boundary vs tax filer — conflating them writes a cross-tenant bug that RLS will not catch on API paths), and `property`'s money face vs compliance face. **Task 13b Step 4a was caused by exactly that last collision** — a plan that enumerated money-only cases for a table carrying both. That is this repo's own evidence for the paper's §3.2.1, not the paper's.
 
+## Session 2026-08-03 — Supabase cloud project created (PARKED), and a blocker found for cut-over
+
+**Project created** via the Supabase MCP, with cost confirmed at **$0/month** (Free tier) beforehand:
+- **ref `yxaemjkhfjjajdyfxegu`**, name `landlord-compliance`, region **eu-west-2 (London)** for UK bank/HMRC data residency, org `zpijywqmtdjnzkwaccxu` ("Mahmudul Hoque's Org"), status `ACTIVE_HEALTHY`.
+- **Deliberately parked.** Local stack remains the dev loop; no `supabase link`, no `db push`, no cloud credentials in `.env`. Nothing about the 236-test loop changed.
+- Three pre-existing projects were found, all paused: `hoquem's Project` and `KICKAI` (eu-north-1), and **`Property Portfolio` (eu-west-2, Sep 2025)**. The last one is in the right region with a suggestive name, so reuse was offered — Mahmud chose a fresh project. **`Property Portfolio` was left untouched**: it was never restored, inspected, or migrated against, because running `0001_core`/`0002_rls` on top of unknown existing schema is not something to do on a guess.
+
+### BLOCKER FOR CUT-OVER (not for now): the cloud project signs JWTs with **ES256**, the local stack with **HS256**
+
+Measured, not assumed. `https://yxaemjkhfjjajdyfxegu.supabase.co/auth/v1/.well-known/jwks.json` publishes a single **ES256** (EC P-256) verification key. The local stack's anon key header decodes to `{"alg":"HS256","typ":"JWT"}` and its `JWT_SECRET` is the shared symmetric secret.
+
+**Consequence:** `src/api/auth.py` verifies with an explicit **HS256-only allowlist** against `SUPABASE_JWT_SECRET`, and `test_hs512_token_signed_with_the_real_secret_is_401` (`tests/api/test_auth.py:72`) exists specifically to fail if that allowlist is widened — its point being that anyone who knows the shared secret can sign HS512 as easily as HS256, so pinning the *family* would not be pinning anything. Against this cloud project, **every valid user token would be rejected**. This is implementation work, not configuration — and it is precisely why "create and park" was the right call over cutting over.
+
+**Options at cut-over, to be decided then, not now:**
+1. **Verify asymmetrically against JWKS** — fetch and cache the project's public key, accept ES256, keep the `aud`/`exp`/`sub` requirements exactly as they are. Correct long-term direction and what Supabase now defaults to; needs key fetching, caching, and rotation handling that does not fail open.
+2. **Check whether this project still exposes a legacy HS256 shared secret** and use it. Not determinable through the MCP tools — it needs the dashboard's API/JWT settings page. If available it is the smaller change, but it is the direction Supabase is moving away from.
+- Either way, **`test_hs512_token_signed_with_the_real_secret_is_401` (`:72`) and `test_token_with_non_string_subject_is_401` (`:143`) are the tripwires**: widen the allowlist deliberately and re-pin it, never delete the tests. Both names verified against the file rather than recalled.
+- **Do not treat local green as cloud green.** The entire `tests/api` suite mints HS256 tokens locally, so it will stay green while cloud auth is completely broken. Any cut-over needs a test against a real cloud-issued token.
+
+**Still to do on the Google client** (Mahmud, one console edit): add `https://yxaemjkhfjjajdyfxegu.supabase.co/auth/v1/callback` to the same OAuth client's Authorised redirect URIs, alongside the existing local one.
+
+**Free-tier note:** projects auto-pause after ~1 week idle; the other three are all paused now. Resuming is one click, but a paused project will refuse connections, which looks like an outage if you have forgotten.
+
 ## Session 2026-08-02/03 — unblocking Task 19 prerequisites (PAUSED mid-flight)
 
 Mahmud chose to clear the three long-standing inputs (Google OAuth, bank list, Supabase cloud) ahead of Task 13b Step 5. **Step 5 remains unticked and 13b remains unticked** — this is a deliberate detour, not a completion.
