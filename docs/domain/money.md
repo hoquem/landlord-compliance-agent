@@ -30,7 +30,7 @@ different things by it — see *Context map*.
 ## Invariants
 
 - **An ownership set sums to exactly 100.** Enforced at `backend/src/core/splits.py:113` (`_validate_shares`) and independently at `backend/src/api/routers/portfolio.py:650`; kept in step by `test_an_api_accepted_ownership_set_is_usable_by_split_amount`. **Deliberately not a database constraint** — `supabase/migrations/0001_core.sql:228-234` explains why: ownership is edited row-by-row through transiently-invalid totals.
-- **Apportioned parts sum back to the original amount, to the penny.** Enforced by a postcondition in `split_amount`; proven by a 20,000-trial stress test.
+- **Apportioned parts sum back to the original amount, to the penny.** Enforced by a runtime postcondition at `backend/src/core/splits.py:104-108`, which raises `RuntimeError` rather than letting a penny drift surface quietly in an export. Pinned by `test_sum_invariant_holds_across_many_deterministic_combinations` — **60 combinations** (10 amounts × 6 share sets, including negatives and zero), deliberately deterministic rather than random. (`progress.md` records a 20,000-trial stress run during Task 9; that was a one-off development check and is **not** in the suite. Do not cite it as coverage.)
 - **Money is `Decimal`, never `float`.** Pydantic builds each `Decimal` from raw JSON text with no float intermediate; pinned by `test_put_ownership_sums_json_numbers_exactly` rather than assumed.
 - **Sign convention: an amount is positive iff the category is income.** Pinned in `src/core/quarters.py`.
 - **Cumulative totals never decrease quarter-over-quarter** without an explicit recompute — the guard against data deleted after an export.

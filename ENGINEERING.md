@@ -77,6 +77,19 @@ backstop under a forgotten filter, only a silent cross-tenant leak.
 - One increment = one verified behaviour. **Every commit green.**
 - Behaviour changes and refactoring in separate commits.
 - A large diff is rejected for re-slicing even when the code is correct.
+- **The rule is about reviewability, so it binds source changes.** A set of
+  documents that only makes sense read together (a glossary's two context
+  files; an audit and the rules it produced) may land as one commit — but say
+  so in the message. If you find yourself claiming that exemption for anything
+  under `src/`, you are re-slicing instead.
+
+## Style
+
+- Docstrings are reStructuredText (`:param:`, `:returns:`, `:raises:`,
+  `:seealso:`), matching the existing modules.
+- Line length and lint are whatever `uv run ruff check` says, run from
+  `backend/`. The repo enforces `check`, not `format` — do not run
+  `ruff format` across files you did not otherwise touch.
 
 ## Prose
 
