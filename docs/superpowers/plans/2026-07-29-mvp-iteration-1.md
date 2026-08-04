@@ -206,6 +206,132 @@ def test_unknown_format_fails_loudly() -> None:
 
 ---
 
+### Task 8a: Real bank formats — the registry redesign (PREREQUISITE for Task 14)
+
+**Added 2026-08-04, after the bank survey in `docs/planning/bank-formats.md`.** Task 8's note says "adding a bank = adding a `StatementFormat` entry + fixture". **That is true for Starling, Monzo and Mettle and false for HSBC and Nationwide, which are 60% of the portfolio's rows.** Task 14 cannot ingest a real file until this lands, so do it before Task 14 rather than discovering it mid-task.
+
+**Files:**
+- Modify: `backend/src/core/parser.py`
+- Modify: `backend/tests/core/test_parser.py` (13 existing `parse_statement` call sites)
+- Create: `backend/tests/fixtures/statements/{hsbc,nationwide,starling,monzo,mettle}.csv`
+
+**Blast radius is tests only.** `parse_statement` has no production caller yet — `flows/categorise.py` only names it in a docstring. Changing its signature is cheap now and expensive after Task 14. That is the whole reason this task exists as a prerequisite.
+
+#### The design decision, and why it is not "sniff harder"
+
+`_FORMATS` is keyed by **normalised header signature**, so a headerless file (HSBC — the largest single source) cannot be matched even in principle. The instinct is to add shape-sniffing. **Don't.** `supabase/migrations/0001_core.sql:293` declares `source_bank text not null` on `imports` — **the schema already requires the caller to name the bank at import time.** So the parser never needed to guess; it needs to be told.
+
+Key the registry by **bank name**, and demote the header from *detection* to *verification*. This is strictly better than sniffing: it dissolves the headerless problem rather than solving it, it makes "you uploaded a Nationwide file and called it HSBC" a loud named error instead of a silent mis-parse, and it removes the ambiguity two banks sharing a header signature would create. Sniffing would have to guess; being told cannot.
+
+- [ ] **Step 1:** Write failing tests for name-keyed dispatch and mismatch detection.
+
+```python
+def test_parse_statement_dispatches_on_the_named_bank() -> None:
+    lines = parse_statement(FIXTURES / "generic.csv", bank="generic")
+    assert len(lines) == 4
+
+def test_unknown_bank_name_fails_loudly() -> None:
+    with pytest.raises(UnknownStatementFormatError) as exc:
+        parse_statement(FIXTURES / "generic.csv", bank="not-a-bank")
+    assert "not-a-bank" in str(exc.value)
+
+def test_header_that_contradicts_the_named_bank_fails_loudly() -> None:
+    """Uploading one bank's file under another bank's name must not mis-parse.
+
+    This is the guard that replaces format sniffing: the caller asserts the
+    bank, and the header is what checks the assertion.
+    """
+    with pytest.raises(StatementFormatMismatchError) as exc:
+        parse_statement(FIXTURES / "starling.csv", bank="generic")
+    assert "generic" in str(exc.value)
+```
+
+- [ ] **Step 2:** Run them. Expect `TypeError: parse_statement() got an unexpected keyword argument 'bank'` for the first two and `NameError` for `StatementFormatMismatchError`.
+- [ ] **Step 3:** Implement. `StatementFormat` gains `name`, an optional `header`, a `header_row`, and an `encoding`; `_FORMATS` is re-keyed by name; `parse_statement` takes `bank`.
+
+```python
+@dataclass(frozen=True)
+class StatementFormat:
+    name: str                                   # registry key; matches imports.source_bank
+    parse_row: Callable[[list[str], int], ParsedLine]
+    #: Expected normalised header, or None for exports that have no header
+    #: row at all (HSBC). None means the header cannot verify the caller's
+    #: `bank` claim -- `min_columns` is the weaker check that remains.
+    header: tuple[str, ...] | None = None
+    #: 0-based index of the header row, for exports that precede it with a
+    #: preamble block (Nationwide: 4 rows of account summary, then a blank).
+    header_row: int = 0
+    #: Per-format text encoding. Nationwide emits iso-8859-1 because of the
+    #: pound sign; decoding it as UTF-8 raises. Never pass errors="replace" --
+    #: a silently mangled description is exactly the quiet corruption this
+    #: module exists to prevent.
+    encoding: str = "utf-8-sig"
+    #: Minimum column count for a data row; the only structural check
+    #: available when `header` is None.
+    min_columns: int = 1
+```
+
+- [ ] **Step 4:** Run. Expect PASS. Update the 13 existing call sites in `test_parser.py` to pass `bank="generic"`.
+- [ ] **Step 5:** Commit `refactor: key the statement registry by bank name, not header`.
+
+- [ ] **Step 6:** Failing test for per-format encoding, using a **real** Nationwide export (sanitised — see Step 12).
+
+```python
+def test_nationwide_is_decoded_as_iso_8859_1() -> None:
+    """The pound sign makes Nationwide's export iso-8859-1, not UTF-8."""
+    lines = parse_statement(FIXTURES / "nationwide.csv", bank="nationwide")
+    assert lines[0].amount == Decimal("1000.00")
+
+def test_wrong_encoding_fails_loudly_rather_than_mangling() -> None:
+    """A decode failure must raise, never substitute replacement characters."""
+    with pytest.raises(StatementDecodeError):
+        parse_statement(FIXTURES / "nationwide.csv", bank="nationwide_utf8_probe")
+```
+
+- [ ] **Step 7:** Run (FAIL), implement `encoding` in `path.open(...)` plus a `StatementDecodeError` wrapping `UnicodeDecodeError`, run (PASS), commit.
+
+- [ ] **Step 8:** Failing test for the preamble skip. Nationwide precedes its header with `"Account Name:"`, `"Account Balance:"`, `"Available Balance: "` and a blank row, so the real header is row index 4.
+
+```python
+def test_nationwide_header_is_found_below_its_preamble() -> None:
+    lines = parse_statement(FIXTURES / "nationwide.csv", bank="nationwide")
+    assert len(lines) == 3
+    assert lines[0].description == "Bank credit"
+```
+
+- [ ] **Step 9:** Implement `header_row` by consuming exactly that many rows before reading the header. **Use an explicit index, not a scan for the first row that looks like a header** — a scan silently picks the wrong row in a file whose preamble happens to resemble data, and silently-wrong is the failure mode this module refuses. Run, PASS, commit.
+
+- [ ] **Step 10:** Failing test for the headerless case (HSBC). Its rows are `30/03/2025,<description>,-150.00` with no header at all.
+
+```python
+def test_hsbc_has_no_header_row_and_parses_from_line_one() -> None:
+    lines = parse_statement(FIXTURES / "hsbc.csv", bank="hsbc")
+    assert len(lines) == 5
+    assert lines[0].date == date(2025, 3, 30)
+
+def test_hsbc_thousands_separators_parse_exactly() -> None:
+    """`"7,422.28"` must be Decimal("7422.28") -- money, so no float anywhere."""
+    lines = parse_statement(FIXTURES / "hsbc.csv", bank="hsbc")
+    assert lines[2].amount == Decimal("7422.28")
+```
+
+- [ ] **Step 11:** Implement: when `header is None`, do not consume a header row, and verify with `min_columns` instead. **`_parse_generic_amount` already strips thousands separators (`parser.py:101`)** — the survey overstated this as a gap; add the test anyway, because it is money and the behaviour must stay pinned. Run, PASS, commit.
+
+- [ ] **Step 12:** Build the five sanitised fixtures from the real exports listed in `docs/planning/bank-formats.md`. **Keep real dates, amounts and column layout; replace account numbers, balances and counterparty names with plausible substitutes.** `backend/tests/fixtures/statements/` is tracked, and although the repo has no remote today it may gain one.
+- [ ] **Step 13:** Register the five formats with their row parsers. Starling, Monzo and Mettle are single signed-amount formats and need little. Nationwide needs a `paid_out`/`paid_in` pair collapsed to one signed amount, a `£` prefix stripped, and `dd Mon yyyy` dates.
+
+**The sign convention is load-bearing and already pinned elsewhere:** `src/core/quarters.py` derives direction as *positive iff income*, so a two-column format must produce `paid_in` positive and `paid_out` negative. Getting this backwards inverts every export total. Add one test per two-column format asserting both signs.
+
+- [ ] **Step 14:** Verify the whole suite plus both directory orderings and `ruff check`, from `backend/`. Commit.
+
+**Explicitly out of scope** — record rather than absorb:
+- **PDF statements.** Barclays and first direct were supplied as PDFs; see `bank-formats.md` for why a PDF is a worse source than a CSV (no year on dates, sparse dates, inline summary rows), not merely a different one.
+- **xlsx.** Mettle offers both; use its CSV.
+- **Barclays and first direct formats.** No CSV sample exists yet — 12% of rows, one of the two accounts dormant. Do not invent a format from a PDF.
+- **Historic backfill.** Banks generally offer CSV only for recent months, so backfilling old periods is a separate problem from ongoing ingestion and must not quietly expand this task.
+
+---
+
 ## Phase 3 — Ownership splits & quarters (pure core logic)
 
 ### Task 9: Ownership split maths
