@@ -1,5 +1,89 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — the categoriser works, and has a real number
+
+**85.00% category accuracy (17/20)** on the golden set against
+`ollama/glm-5.2:cloud`, above the 0.70 threshold. First real accuracy figure
+this project has had. 472 backend tests, ruff clean.
+
+### Why the flow stopped asking the SDK to parse
+
+Mahmud's call, made against my recommendation and after I put the objection
+in front of him. The objection was that tolerating fenced JSON trades a loud
+failure for a lenient parser at the point where an LLM's output becomes a tax
+figure. What changed my read of it was the measurement: **the enforcement
+being given up was already fictional on this provider.**
+
+| request | result |
+|---|---|
+| OpenAI-compat `response_format={"type":"json_schema","strict":true}` | prose with markdown headings |
+| Ollama native `/api/chat` with `format=<schema>` | the same prose |
+| Through CrewAI, which also puts the schema in the prompt | correct JSON, wrapped in a ```` ```json ```` fence |
+
+Constrained decoding is a property of the *local* runner; a `:cloud` tag has
+none, so the schema is dropped in transit. A **756-billion-parameter** model
+failing at pure instruction-following is not a capability limit — nothing was
+constraining it. Which also answers "why not a smaller, cheaper cloud model":
+with nothing enforcing the schema, compliance rests entirely on
+instruction-following, and that is exactly what degrades as models get
+smaller.
+
+### What the change actually is
+
+`response_format` dropped; the reply read off `result.raw`, one whole-answer
+markdown fence stripped, then `StatementProposals.model_validate_json` and
+then `_validate_proposals` — both unchanged, both loud.
+
+**Leniency stops at the wrapper.** The fence regex is anchored at both ends
+and applied to already-stripped text, so it can only remove a wrapper — it
+cannot pick a JSON-looking fragment out of a reply that also contains
+commentary. A model that says "here are the proposals, but I was unsure about
+line 3" is telling us something, and quietly extracting the JSON would
+discard it.
+
+`_build_prompt` became load-bearing for format, which is the real consequence:
+dropping `response_format` also dropped the schema CrewAI injected with it, so
+the prompt now has to name the JSON shape, forbid the fence, and list all
+fifteen categories. Pinned by
+`test_the_prompt_carries_the_shape_the_sdk_used_to_supply`.
+
+**Two mutations, each killing what it should and nothing else:**
+- `_unwrap` returns its input unchanged → the three fenced cases and the
+  contract-check test die; bare JSON and whitespace-padded JSON survive.
+- the `_validate_proposals` call deleted → five die, including
+  `test_a_fenced_answer_still_faces_the_contract_check`. That one is the
+  whole point: it proves leniency never reached the contract.
+
+**Scope was three stub sites, not one.** `tests/flows`, `tests/evals` and
+`tests/e2e` all asserted `response_format is StatementProposals` and returned
+`.pydantic`. All now return `.raw` — better fidelity, since the stubs exercise
+the parsing the flow owns instead of handing it an object that could never
+have been malformed. The E2E stub returns *fenced* text specifically, because
+that is what the real model does.
+
+One test was removed rather than adapted:
+`test_flow_raises_when_agent_does_not_return_structured_output` asserted on a
+state that can no longer occur. Strictly superseded by
+`test_the_flow_refuses_an_empty_answer` and
+`test_the_flow_refuses_prose_and_quotes_what_came_back`, which cover a case
+the old one could not reach at all. A comment stands where it was.
+
+### Ignore the property-allocation number
+
+The same run reports **11.76%** property allocation. It measures the golden
+set, not the model: **no golden-set description names its property.**
+"STANDING ORDER RENT - J SMITH" → "18 Sample Avenue" is not inferable from
+the text — it needs the tenant-to-property history that production supplies as
+up to 50 few-shot examples and the harness deliberately withholds (it is a
+cold-start comparison by design, and says so). Fixing this means real
+confirmed lines in the golden set, which is already the standing action.
+
+### Still true
+
+The category accuracy is against **synthetic** data, and `:cloud` still means
+statement descriptions leave the machine. Both were known and chosen; neither
+is fixed by this change.
+
 ## Session 2026-08-04 (cont.) — CATEGORISER_MODEL set, and what setting it revealed
 
 `.env` now has `CATEGORISER_MODEL=ollama/glm-5.2:cloud`, Mahmud's choice after

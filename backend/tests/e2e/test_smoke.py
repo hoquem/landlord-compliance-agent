@@ -133,17 +133,17 @@ class StubAgent:
         self.config = config
         self.llm = llm
 
-    def kickoff(self, prompt: str, response_format: type | None = None) -> SimpleNamespace:
+    def kickoff(self, prompt: str, **kwargs: object) -> SimpleNamespace:
         """Answer the prompt from :data:`_PROPOSALS`.
 
         :param prompt: the prompt the flow built.
-        :param response_format: the structured-output contract the flow asks
-            for; asserted rather than ignored, because a flow that stopped
-            requesting one would still pass a stub that did not look.
-        :returns: an object shaped like a CrewAI result, with ``.pydantic``.
+        :param kwargs: asserted to carry no ``response_format`` -- the flow
+            parses the reply itself now, and a stub that quietly accepted one
+            would hide the flow going back to asking the SDK to parse.
+        :returns: an object shaped like a CrewAI result, with ``.raw``.
         """
         StubAgent.prompts.append(prompt)
-        assert response_format is StatementProposals
+        assert "response_format" not in kwargs
 
         offered = _PROPERTY_RE.findall(prompt)
         assert len(offered) == 1, f"expected one property in the prompt, got {offered}"
@@ -161,7 +161,12 @@ class StubAgent:
                     rationale="stubbed",
                 )
             )
-        return SimpleNamespace(pydantic=StatementProposals(proposals=proposals))
+        # Fenced, deliberately. This is what `ollama/glm-5.2:cloud` actually
+        # returns (measured 2026-08-04), and the E2E is the one test where
+        # the whole chain -- model text through to a filed figure -- is real
+        # enough for that wrapper to matter.
+        body = StatementProposals(proposals=proposals).model_dump_json()
+        return SimpleNamespace(raw=f"```json\n{body}\n```")
 
 
 @pytest.fixture

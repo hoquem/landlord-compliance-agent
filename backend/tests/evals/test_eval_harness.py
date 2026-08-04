@@ -353,10 +353,10 @@ def _stub_kickoff_matching_expected(monkeypatch: pytest.MonkeyPatch) -> None:
     faked.
     """
 
-    def fake_kickoff(
-        self: Any, messages: Any, response_format: Any = None, **kwargs: Any
-    ) -> Any:
-        assert response_format is StatementProposals
+    def fake_kickoff(self: Any, messages: Any, **kwargs: Any) -> Any:
+        # The flow parses the model's text itself now, so the stub answers
+        # with text. See `src/flows/categorise.py`'s module docstring.
+        assert "response_format" not in kwargs
         # Cheat: parse the expected category straight back out of the
         # prompt's few-shot-free line list isn't available here, so instead
         # this fake is only used with golden sets the test itself controls
@@ -388,7 +388,7 @@ def _stub_kickoff_matching_expected(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
         class _FakeResult:
-            pydantic = proposals
+            raw = proposals.model_dump_json()
 
         return _FakeResult()
 
@@ -450,7 +450,7 @@ def test_main_exits_one_when_accuracy_below_threshold(
         )
 
         class _FakeResult:
-            pydantic = proposals
+            raw = proposals.model_dump_json()
 
         return _FakeResult()
 
@@ -514,7 +514,7 @@ def test_main_respects_limit(
         )
 
         class _FakeResult:
-            pydantic = proposals
+            raw = proposals.model_dump_json()
 
         return _FakeResult()
 

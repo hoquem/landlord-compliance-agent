@@ -51,10 +51,16 @@ def _proposal(
 
 
 class _FakeAgentResult:
-    """Duck-types the ``.pydantic`` attribute of ``LiteAgentOutput``."""
+    """Duck-types the ``.raw`` attribute of ``LiteAgentOutput``.
 
-    def __init__(self, pydantic: Any) -> None:
-        self.pydantic = pydantic
+    ``.raw`` rather than ``.pydantic``: the flow no longer asks the SDK to
+    parse, so the text is what it actually reads. Stubbing the text also
+    means these tests exercise the parsing the flow now owns, instead of
+    handing it an object that could never have been malformed.
+    """
+
+    def __init__(self, raw: Any) -> None:
+        self.raw = raw
 
 
 # ---------------------------------------------------------------------------
@@ -173,13 +179,21 @@ def _mock_kickoff(
     proposals: Any,
     captured: dict[str, Any] | None = None,
 ) -> None:
-    def fake_kickoff(
-        self: Any, messages: Any, response_format: Any = None, **kwargs: Any
-    ) -> Any:
-        assert response_format is StatementProposals
+    """Stub the agent to answer with ``proposals`` serialised as model text.
+
+    Takes a :class:`StatementProposals` (or ``None`` for "the model said
+    nothing usable") and renders it the way a real answer arrives -- as JSON
+    text on ``.raw``. The tests below were written against an object handed
+    straight to the flow; going through the serialisation keeps them
+    honest now that the flow parses.
+    """
+
+    def fake_kickoff(self: Any, messages: Any, **kwargs: Any) -> Any:
+        assert "response_format" not in kwargs
         if captured is not None:
             captured["prompt"] = messages
-        return _FakeAgentResult(proposals)
+        raw = "" if proposals is None else proposals.model_dump_json()
+        return _FakeAgentResult(raw=raw)
 
     monkeypatch.setattr(categorise.Agent, "kickoff", fake_kickoff)
 
@@ -382,20 +396,155 @@ def test_flow_prompt_contains_numbered_lines_properties_and_instructions(
     assert "never invent one" in prompt
 
 
-def test_flow_raises_when_agent_does_not_return_structured_output(
-    monkeypatch: pytest.MonkeyPatch,
+# `test_flow_raises_when_agent_does_not_return_structured_output` stood here.
+# It asserted that a `None` on `result.pydantic` raised -- a state that can no
+# longer occur, because the flow stopped asking the SDK to parse. Superseded
+# strictly by the two below it: `test_the_flow_refuses_an_empty_answer` covers
+# the agent saying nothing, and `test_the_flow_refuses_prose_and_quotes_what_
+# came_back` covers it saying something unparseable, which the old test could
+# not reach at all.
+
+
+# ---------------------------------------------------------------------------
+# Reading the model's text: fences tolerated, content never.
+#
+# The flow stopped passing ``response_format`` (see the module docstring in
+# ``categorise.py``), so these pin the whole of what replaced it. The line
+# worth keeping straight: **leniency stops at the wrapper.** A fence is
+# whitespace with delusions of grandeur; everything inside it still has to
+# satisfy ``StatementProposals`` and then ``_validate_proposals``.
+# ---------------------------------------------------------------------------
+ONE_LINE = {"lines": [{"date": "2026-07-01", "description": "A", "amount": "-1.00"}]}
+
+#: A minimal well-formed answer for a single line, as raw model text.
+ONE_PROPOSAL_JSON = (
+    '{"proposals": [{"line_index": 0, "hmrc_category": "repairs_maintenance", '
+    '"property_id": null, "confidence": 0.9, "rationale": "hardware shop"}]}'
+)
+
+
+def _raw_kickoff(
+    monkeypatch: pytest.MonkeyPatch, raw: str, captured: dict[str, Any] | None = None
 ) -> None:
-    _mock_kickoff(monkeypatch, None)
+    """Stub the agent to return ``raw`` as its text, the way a real one does."""
+
+    def fake_kickoff(self: Any, messages: Any, **kwargs: Any) -> Any:
+        assert "response_format" not in kwargs, (
+            "the flow must not ask the SDK to parse; it parses the text itself"
+        )
+        if captured is not None:
+            captured["prompt"] = messages
+        return _FakeAgentResult(raw=raw)
+
+    monkeypatch.setattr(categorise.Agent, "kickoff", fake_kickoff)
+
+
+@pytest.mark.parametrize(
+    ("label", "raw"),
+    [
+        ("bare", ONE_PROPOSAL_JSON),
+        ("fenced with a language tag", f"```json\n{ONE_PROPOSAL_JSON}\n```"),
+        ("fenced without one", f"```\n{ONE_PROPOSAL_JSON}\n```"),
+        ("surrounded by whitespace", f"\n\n  {ONE_PROPOSAL_JSON}  \n"),
+        ("fenced and padded", f"  ```json\n{ONE_PROPOSAL_JSON}\n```  \n"),
+    ],
+)
+def test_the_flow_reads_proposals_however_the_model_wrapped_them(
+    monkeypatch: pytest.MonkeyPatch, label: str, raw: str
+) -> None:
+    """A markdown fence is packaging, not content.
+
+    Measured 2026-08-04 against ``ollama/glm-5.2:cloud``, which returns
+    exactly the second case: Ollama's cloud path does not constrain decoding,
+    so nothing stops a model dressing its JSON up.
+    """
+    _raw_kickoff(monkeypatch, raw)
 
     flow = CategoriseStatementFlow()
-    with pytest.raises(CategorisationResultError, match="structured"):
-        flow.kickoff(
-            inputs={
-                "lines": [
-                    {"date": "2026-07-01", "description": "A", "amount": "-1.00"}
-                ],
-            }
-        )
+    flow.kickoff(inputs=ONE_LINE)
+
+    assert flow.state.proposals is not None, label
+    assert flow.state.proposals.proposals[0].hmrc_category is HmrcCategory.REPAIRS_MAINTENANCE
+
+
+def test_the_flow_refuses_prose_and_quotes_what_came_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The error message is now the whole debugging surface.
+
+    Without ``response_format`` there is no SDK error naming the offending
+    field, so a model that answers in sentences -- which the same model does
+    when the prompt does not spell the format out -- has to fail here, loudly
+    and quoting itself.
+    """
+    _raw_kickoff(monkeypatch, "**Category:** Home Improvement / DIY. Hope that helps!")
+
+    flow = CategoriseStatementFlow()
+    with pytest.raises(CategorisationResultError, match="Home Improvement"):
+        flow.kickoff(inputs=ONE_LINE)
+
+
+def test_the_flow_refuses_an_empty_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty string is not an empty proposal set; it is no answer at all."""
+    _raw_kickoff(monkeypatch, "   \n  ")
+
+    flow = CategoriseStatementFlow()
+    with pytest.raises(CategorisationResultError):
+        flow.kickoff(inputs=ONE_LINE)
+
+
+def test_a_fenced_answer_still_faces_the_contract_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**The test this whole change stands on.**
+
+    Tolerating the wrapper must not tolerate the contents. A `line_index` of
+    7 against a one-line statement is the failure that would attach a
+    proposal to the wrong transaction, and it has to die exactly as it did
+    when the SDK was parsing.
+    """
+    out_of_range = ONE_PROPOSAL_JSON.replace('"line_index": 0', '"line_index": 7')
+    _raw_kickoff(monkeypatch, f"```json\n{out_of_range}\n```")
+
+    flow = CategoriseStatementFlow()
+    with pytest.raises(CategorisationResultError, match="out of range"):
+        flow.kickoff(inputs=ONE_LINE)
+
+
+def test_a_fenced_answer_still_faces_pydantic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Confidence above 1 was refused by the schema; it must still be refused."""
+    impossible = ONE_PROPOSAL_JSON.replace('"confidence": 0.9', '"confidence": 4.2')
+    _raw_kickoff(monkeypatch, f"```json\n{impossible}\n```")
+
+    flow = CategoriseStatementFlow()
+    with pytest.raises(CategorisationResultError):
+        flow.kickoff(inputs=ONE_LINE)
+
+
+def test_the_prompt_carries_the_shape_the_sdk_used_to_supply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_build_prompt`` is now the only thing producing parseable output.
+
+    Dropping ``response_format`` dropped the schema CrewAI injected with it.
+    Measured: the same model asked without a format instruction answers in
+    prose with markdown headings. So the prompt has to name the JSON shape,
+    forbid the fence, and list the categories -- nothing else will.
+    """
+    captured: dict[str, Any] = {}
+    _raw_kickoff(monkeypatch, ONE_PROPOSAL_JSON, captured)
+
+    flow = CategoriseStatementFlow()
+    flow.kickoff(inputs=ONE_LINE)
+
+    prompt = captured["prompt"]
+    assert '"proposals"' in prompt
+    assert "line_index" in prompt
+    assert "raw JSON" in prompt
+    assert "```" in prompt, "the prompt must name the fence in order to forbid it"
+    # Every category, because the model can no longer be handed the enum.
+    for category in HmrcCategory:
+        assert category.value in prompt
 
 
 def test_confirmed_example_defaults_property_id_to_none() -> None:

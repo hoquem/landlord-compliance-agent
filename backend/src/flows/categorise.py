@@ -12,12 +12,50 @@ Model selection is fully env-driven (``CATEGORISER_MODEL``, optional
 intends to point this at a local open-weight model via Ollama for bank-data
 privacy.
 
-:seealso: spec Task 11 -- categorisation flow (CrewAI).
+**This flow parses the model's text itself, and does not pass
+``response_format``.** That is a deliberate loosening, decided 2026-08-04,
+and the reason is that the enforcement it gave up was already fictional on
+the configured provider. Measured against ``ollama/glm-5.2:cloud``:
+
+* OpenAI-compatible ``response_format={"type": "json_schema", strict: true}``
+  -> prose with markdown headings;
+* Ollama's own ``format=<schema>`` on ``/api/chat`` -> the same prose.
+
+Constrained decoding is a property of the *local* runner, and a ``:cloud``
+tag has none -- the schema is dropped in transit. What actually produced
+JSON was the prompt asking for it, and the model then wrapped it in a
+`````json`` fence, which the OpenAI SDK's parser rejected before this
+module saw a single byte.
+
+So the trade is: give up a provider *refusing to emit* bad JSON (which this
+one never did), keep this module *refusing to accept* it. Both guards that
+matter still run, in this order, and both are loud:
+
+1. :class:`StatementProposals` validation -- exactly what the schema
+   encoded: known categories, confidence in range, required fields;
+2. :func:`_validate_proposals` -- the part a schema never covered anyway:
+   one proposal per line, indices in range and unique, property ids drawn
+   from the list offered.
+
+**Leniency stops at the wrapper.** A fence is stripped; nothing inside it is
+forgiven. ``test_a_fenced_answer_still_faces_the_contract_check`` and
+``test_a_fenced_answer_still_faces_pydantic`` are what hold that line.
+
+The cost is real and worth naming: against a provider that *does* honour
+strict structured output (Anthropic does), this gives up genuine
+server-side enforcement in exchange for a parser. Point
+``CATEGORISER_MODEL`` at such a provider and the guards above are the only
+thing standing between a malformed answer and a tax figure -- which is why
+they are tested harder than anything else in this module.
+
+:seealso: spec Task 11 -- categorisation flow (CrewAI);
+    ``docs/planning/progress.md`` for the measurements behind the decision.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -27,7 +65,7 @@ from uuid import UUID
 import yaml
 from crewai import LLM, Agent
 from crewai.flow import Flow, listen, start
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.core.categories import HmrcCategory
 from src.core.parser import ParsedLine
@@ -244,6 +282,8 @@ def _build_prompt(
     else:
         few_shot_block = "(none available)"
 
+    categories_block = "\n".join(f"- {c.value}" for c in HmrcCategory)
+
     return f"""Categorise every statement line below into exactly one HMRC \
 SA105 category and, where the evidence supports it, attribute it to one of \
 the listed properties.
@@ -259,6 +299,9 @@ use null when a line has no clear property attribution):
 Previously confirmed categorisations for this org, for reference:
 {few_shot_block}
 
+The ONLY valid hmrc_category values:
+{categories_block}
+
 Rules:
 - Return exactly one proposal per statement line above, referencing its \
 line_index exactly as given -- do not skip, merge, or invent lines.
@@ -269,7 +312,63 @@ confidence score. Never invent certainty you do not have.
 landlord income or an allowable/capital property expense -- do not force a \
 personal line into a business category.
 - property_id must be either null or exactly one of the ids listed above.
+
+Reply with raw JSON and nothing else. No ``` fence, no explanation before \
+or after it, no markdown. Exactly this shape:
+{{"proposals": [{{"line_index": 0, "hmrc_category": "repairs_maintenance", \
+"property_id": null, "confidence": 0.9, "rationale": "why, in one short \
+sentence"}}]}}
 """
+
+
+#: A markdown code fence around the whole answer, with an optional language
+#: tag. Anchored at both ends and applied to already-stripped text, so it can
+#: only remove a wrapper -- it cannot pick a JSON-looking fragment out of a
+#: reply that also contains commentary. That restraint is the point: a model
+#: that says "here are the proposals, but I was unsure about line 3" is
+#: telling us something, and quietly extracting the JSON would discard it.
+_CODE_FENCE = re.compile(r"\A```[A-Za-z0-9_-]*\s*\n(?P<body>.*?)\n?```\Z", re.DOTALL)
+
+
+def _unwrap(raw: str) -> str:
+    """Strip surrounding whitespace and one whole-answer markdown fence.
+
+    The only tolerance this module extends to a model's output. See the
+    module docstring for why it exists and where the line is drawn.
+
+    :param raw: the model's reply, verbatim.
+    :returns: the same text with padding and an enclosing fence removed.
+    """
+    stripped = raw.strip()
+    match = _CODE_FENCE.match(stripped)
+    return match.group("body").strip() if match else stripped
+
+
+def _parse_proposals(raw: object) -> StatementProposals:
+    """Read the model's reply into a validated :class:`StatementProposals`.
+
+    :param raw: whatever the agent put on ``result.raw``.
+    :raises CategorisationResultError: if the reply is empty, or is not JSON
+        matching the contract. The message quotes the reply, because without
+        ``response_format`` there is no SDK error naming the offending field
+        and this is the only thing a human debugging a failed job will see.
+    :returns: the parsed proposals, before the line/property contract check.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise CategorisationResultError(
+            f"agent returned no usable text (got {raw!r})"
+        )
+    body = _unwrap(raw)
+    try:
+        return StatementProposals.model_validate_json(body)
+    except ValidationError as exc:
+        # Truncated: a reply can be long, and the first 500 characters have
+        # always been enough to see whether it is prose, a fence this regex
+        # did not match, or genuinely malformed JSON.
+        raise CategorisationResultError(
+            f"agent did not return a structured StatementProposals output. "
+            f"Reply was: {body[:500]!r} -- {exc}"
+        ) from exc
 
 
 def _validate_proposals(
@@ -348,9 +447,14 @@ class CategoriseStatementFlow(Flow[CategoriseState]):
     def categorise(self) -> None:
         """Run the categoriser agent and validate its output.
 
-        :raises CategorisationResultError: if the agent did not return a
-            structured :class:`StatementProposals` output, or its
-            proposals fail :func:`_validate_proposals`.
+        **No ``response_format``** -- see the module docstring. The reply is
+        read off ``result.raw`` and parsed here, which is why
+        :func:`_build_prompt` has to state the JSON shape and list the
+        categories: nothing else supplies them any more.
+
+        :raises CategorisationResultError: if the reply is not parseable as
+            :class:`StatementProposals`, or its proposals fail
+            :func:`_validate_proposals`.
         """
         agent_config = _load_categoriser_agent_config()
         agent = Agent(config=agent_config, llm=_build_llm())
@@ -358,13 +462,8 @@ class CategoriseStatementFlow(Flow[CategoriseState]):
         prompt = _build_prompt(
             self.state.lines, self.state.properties, self.state.few_shot
         )
-        result = agent.kickoff(prompt, response_format=StatementProposals)
+        result = agent.kickoff(prompt)
 
-        proposals = result.pydantic
-        if not isinstance(proposals, StatementProposals):
-            raise CategorisationResultError(
-                "agent did not return a structured StatementProposals output"
-            )
-
+        proposals = _parse_proposals(result.raw)
         _validate_proposals(proposals, self.state.lines, self.state.properties)
         self.state.proposals = proposals
