@@ -1,5 +1,52 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — CATEGORISER_MODEL set, and what setting it revealed
+
+`.env` now has `CATEGORISER_MODEL=ollama/glm-5.2:cloud`, Mahmud's choice after
+being shown the trade-off. **The categorisation path still does not work**, and
+the reason only surfaced because the value was verified rather than written and
+declared done.
+
+**`ollama/` does not mean local.** Every model on this machine is a `:cloud`
+tag — ~320-byte pointer manifests, not weights — so despite the prefix,
+statement descriptions go over the network to Ollama. That contradicts the
+"local open-weight model for bank-data privacy" intent stated in
+`src/flows/categorise.py`, `.env.example` and the spec. Chosen knowingly; the
+fix is `ollama pull <a model with real weights>` and one line in `.env`.
+
+**Four of the five installed tags do not answer at all.** One synthetic
+golden-set line each (the golden set is invented, so nothing real was sent):
+
+| tag | result |
+|---|---|
+| `glm-5.2:cloud` | reaches the model |
+| `kimi-k3:cloud` | 402 — extra-usage balance empty |
+| `qwen3-coder-next:cloud` | 410 — retired 2026-07-15 |
+| `deepseek-v3.2:cloud` | 410 — retired 2026-07-15 |
+| `minimax-m2.1:cloud` | 410 — retired 2026-07-15 |
+
+`glm-4.5-air`, the value `.env.example` has carried since Task 11, is not
+installed at all. Copying it in would have produced a config that looks right
+and fails at first use.
+
+**The one reachable model fences its JSON.** `glm-5.2` returns
+` ```json {"proposals": [...]} ``` `, and the OpenAI structured-output parser
+behind `Agent.kickoff(response_format=StatementProposals)` rejects it before
+the flow's own validation runs. So the variable is correctly set and
+reachable, and a `categorise` job would still fail.
+
+**Deliberately not worked around.** Making the flow tolerate fenced output
+means dropping `response_format` and parsing ourselves — a design change to
+money-path code, and one that trades a loud failure for a lenient parser on
+the one boundary where an LLM's output becomes a tax figure. That is Mahmud's
+call, not a tidy-up. The alternative is a model that honours strict
+`json_schema`.
+
+`.env.example` now warns about all three traps (`:cloud` ≠ local, cloud models
+get retired, fenced JSON), and names
+`evals/run_eval.py --limit 1 --model <id>` as the cheapest way to find out
+which you have.
+
 ## Session 2026-08-04 (cont.) — Task 24 COMPLETE, and the P0 is closed
 
 **Iteration 1 is done.** 463 backend tests, 104 Flutter tests, ruff and
