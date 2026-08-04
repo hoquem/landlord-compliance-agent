@@ -222,11 +222,245 @@ class StatementFormat:
     min_columns: int = 1
 
 
+#: Currency symbols to strip before parsing an amount. Nationwide writes
+#: ``£1000.00`` inside the cell rather than a bare number.
+_CURRENCY_SYMBOLS = "£"
+
+
+def _parse_pound_amount(raw: str) -> Decimal:
+    """Parse an amount that may carry a pound sign and thousands separators.
+
+    Kept separate from :func:`_parse_generic_amount` rather than folded into
+    it: the generic format has never emitted a currency symbol, and quietly
+    widening what it accepts would weaken a format whose strictness is
+    tested. Formats opt in by using this parser.
+
+    :param raw: raw amount cell, e.g. ``"£1,000.00"``.
+    :raises ValueError: if what remains is not a valid decimal number.
+    """
+    candidate = raw.strip().lstrip(_CURRENCY_SYMBOLS).replace(",", "")
+    try:
+        return Decimal(candidate)
+    except InvalidOperation as exc:
+        raise ValueError(f"unparseable amount: {raw!r}") from exc
+
+
+def _parse_nationwide_row(row: list[str], row_number: int) -> ParsedLine:
+    """Parse one Nationwide ``Paid out``/``Paid in`` row.
+
+    Nationwide splits money across two columns instead of signing one, so
+    the pair is collapsed here. **Direction is the whole point:** ``Paid in``
+    becomes positive and ``Paid out`` negative, matching the convention
+    ``src/core/quarters.py`` derives totals from (positive iff income).
+    Reversing it would invert every export while each row still looked
+    perfectly plausible -- pinned by
+    ``test_nationwide_paid_in_is_positive_and_paid_out_is_negative``.
+
+    Exactly one of the two must be populated. Neither is a row that moves no
+    money, which is malformed rather than a zero; both is ambiguous. Either
+    raises rather than guessing, because both silent resolutions lose or
+    invent money.
+
+    :param row: raw CSV cells: date, type, description, paid out, paid in, balance.
+    :param row_number: 1-based physical row number, for error messages.
+    :raises StatementParseError: wrong column count, unparseable date or
+        amount, or a Paid out/Paid in pair that is not exactly one value.
+    """
+    if len(row) != 6:
+        raise StatementParseError(row_number, f"expected 6 columns, got {len(row)}")
+    raw_date, txn_type, description, raw_out, raw_in, _raw_balance = row
+
+    try:
+        # `dd Mon yyyy`, e.g. "28 Oct 2024". Naive by design, as in
+        # _parse_generic_date: a statement date is a calendar date with no
+        # timezone concept, and the datetime is an intermediate discarded by
+        # .date() on the same line.
+        parsed_date = datetime.strptime(raw_date.strip(), "%d %b %Y").date()  # noqa: DTZ007
+    except ValueError as exc:
+        raise StatementParseError(row_number, f"unparseable date: {raw_date!r}") from exc
+
+    paid_out, paid_in = raw_out.strip(), raw_in.strip()
+    if paid_out and paid_in:
+        raise StatementParseError(
+            row_number, f"both Paid out ({paid_out!r}) and Paid in ({paid_in!r}) are set"
+        )
+    if not paid_out and not paid_in:
+        raise StatementParseError(row_number, "neither Paid out nor Paid in is set")
+
+    try:
+        magnitude = _parse_pound_amount(paid_in or paid_out)
+    except ValueError as exc:
+        raise StatementParseError(row_number, str(exc)) from exc
+    amount = magnitude if paid_in else -magnitude
+
+    # Both cells carry signal the categoriser wants -- "Direct debit" is as
+    # informative as the counterparty -- and neither is redundant, so keep
+    # both rather than choosing.
+    narrative = " ".join(part for part in (txn_type.strip(), description.strip()) if part)
+    return ParsedLine(date=parsed_date, description=narrative, amount=amount)
+
+
+def _parse_hsbc_row(row: list[str], row_number: int) -> ParsedLine:
+    """Parse one HSBC ``date,description,amount`` row.
+
+    HSBC's export has **no header row**, so ``row_number`` 1 is already data
+    and there is no header to verify the caller's ``bank`` against. The
+    column count is therefore the only structural evidence that the right
+    file was uploaded, which is why a short row raises rather than being
+    padded.
+
+    Amounts arrive quoted with thousands separators (``"7,422.28"``);
+    :func:`_parse_generic_amount` already strips those.
+
+    :param row: raw CSV cells: date, description, signed amount.
+    :param row_number: 1-based physical row number, for error messages.
+    :raises StatementParseError: wrong column count, unparseable date, or
+        unparseable amount.
+    """
+    if len(row) != 3:
+        raise StatementParseError(row_number, f"expected 3 columns, got {len(row)}")
+    raw_date, description, raw_amount = row
+    try:
+        parsed_date = _parse_generic_date(raw_date)
+    except ValueError as exc:
+        raise StatementParseError(row_number, str(exc)) from exc
+    try:
+        amount = _parse_generic_amount(raw_amount)
+    except ValueError as exc:
+        raise StatementParseError(row_number, str(exc)) from exc
+    return ParsedLine(date=parsed_date, description=description.strip(), amount=amount)
+
+
+def _single_amount_row(
+    *, date_index: int, description_indices: tuple[int, ...], amount_index: int, columns: int
+) -> Callable[[list[str], int], ParsedLine]:
+    """Build a row parser for a headered format with one signed amount column.
+
+    Starling, Monzo and Mettle differ only in which columns carry the date,
+    the narrative and the amount, so they share one parser rather than three
+    near-identical copies. Formats whose shape is genuinely different --
+    Nationwide's two-column money, HSBC's headerless rows -- keep their own.
+
+    :param date_index: column holding the transaction date.
+    :param description_indices: columns to join into the narrative, in
+        order; empty cells are skipped.
+    :param amount_index: column holding the signed amount.
+    :param columns: exact number of cells a valid row must have.
+    :returns: a ``parse_row`` callable for :class:`StatementFormat`.
+    """
+
+    def parse_row(row: list[str], row_number: int) -> ParsedLine:
+        if len(row) != columns:
+            raise StatementParseError(row_number, f"expected {columns} columns, got {len(row)}")
+        try:
+            parsed_date = _parse_generic_date(row[date_index])
+        except ValueError as exc:
+            raise StatementParseError(row_number, str(exc)) from exc
+        try:
+            amount = _parse_pound_amount(row[amount_index])
+        except ValueError as exc:
+            raise StatementParseError(row_number, str(exc)) from exc
+        narrative = " ".join(
+            part for part in (row[i].strip() for i in description_indices) if part
+        )
+        return ParsedLine(date=parsed_date, description=narrative, amount=amount)
+
+    return parse_row
+
+
 GENERIC_FORMAT = StatementFormat(
     name="generic",
     parse_row=_parse_generic_row,
     header=("date", "description", "amount", "balance"),
     min_columns=4,
+)
+
+HSBC_FORMAT = StatementFormat(
+    name="hsbc",
+    parse_row=_parse_hsbc_row,
+    # No header row at all -- see _parse_hsbc_row. This is the reason the
+    # registry is keyed by bank name rather than header signature.
+    header=None,
+    min_columns=3,
+)
+
+STARLING_FORMAT = StatementFormat(
+    name="starling",
+    parse_row=_single_amount_row(
+        date_index=0, description_indices=(1, 2, 3), amount_index=4, columns=8
+    ),
+    header=(
+        "date",
+        "counter party",
+        "reference",
+        "type",
+        "amount (gbp)",
+        "balance (gbp)",
+        "spending category",
+        "notes",
+    ),
+    min_columns=8,
+)
+
+MONZO_FORMAT = StatementFormat(
+    name="monzo",
+    # Monzo carries both a signed `Amount` and a redundant Money Out/Money In
+    # pair. The signed column is used: one source, no pair to reconcile.
+    parse_row=_single_amount_row(
+        date_index=1, description_indices=(4, 14), amount_index=7, columns=18
+    ),
+    header=(
+        "transaction id",
+        "date",
+        "time",
+        "type",
+        "name",
+        "emoji",
+        "category",
+        "amount",
+        "currency",
+        "local amount",
+        "local currency",
+        "notes and #tags",
+        "address",
+        "receipt",
+        "description",
+        "category split",
+        "money out",
+        "money in",
+    ),
+    min_columns=18,
+)
+
+METTLE_FORMAT = StatementFormat(
+    name="mettle",
+    parse_row=_single_amount_row(
+        date_index=0, description_indices=(4, 3), amount_index=1, columns=10
+    ),
+    header=(
+        "date",
+        "amount in gbp",
+        "balance",
+        "reference",
+        "description",
+        "transaction type",
+        "invoices",
+        "receipts",
+        "note",
+        "category",
+    ),
+    min_columns=10,
+)
+
+NATIONWIDE_FORMAT = StatementFormat(
+    name="nationwide",
+    parse_row=_parse_nationwide_row,
+    header=("date", "transaction type", "description", "paid out", "paid in", "balance"),
+    # Three account-summary rows and one blank row precede the header.
+    header_row=4,
+    # The pound sign makes this iso-8859-1; reading it as UTF-8 raises.
+    encoding="iso-8859-1",
+    min_columns=6,
 )
 
 #: Registered statement formats, keyed by **bank name**.
@@ -239,7 +473,17 @@ GENERIC_FORMAT = StatementFormat(
 #: header still earns its place as *verification*, turning "wrong file for
 #: this bank" into :class:`StatementFormatMismatchError` rather than a quiet
 #: mis-parse by the wrong row parser.
-_FORMATS: dict[str, StatementFormat] = {GENERIC_FORMAT.name: GENERIC_FORMAT}
+_FORMATS: dict[str, StatementFormat] = {
+    fmt.name: fmt
+    for fmt in (
+        GENERIC_FORMAT,
+        HSBC_FORMAT,
+        NATIONWIDE_FORMAT,
+        STARLING_FORMAT,
+        MONZO_FORMAT,
+        METTLE_FORMAT,
+    )
+}
 
 
 def _normalise_header(header: list[str]) -> tuple[str, ...]:

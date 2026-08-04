@@ -106,6 +106,24 @@ An explicit `null` in a PATCH body wipes the field (`epc_rating`, `epc_expiry`, 
 
 **Working method that has been earning its keep:** ask subagents to push back with evidence rather than comply. Three confident-but-wrong claims surfaced today — one reviewer's mutation outcome (twice) and one of mine propagated into a plan constraint — and in every case the implementer who challenged it was right. Verify the discriminating command yourself before pinning anything. First task where the RLS-bypass constraint bites: brief requires an API-level two-org isolation test AND a filter-removal probe proving that test has teeth. Also pinned the three schema traps (0% ownership dies at the DB CHECK; duplicate entity_id hits the unique constraint; composite FKs firing means my filtering was wrong) and Decimal-not-float for the sum-to-100.
 
+## Session 2026-08-04 — Task 8a COMPLETE (parser redesign for real bank formats)
+
+**253 tests** (was 238), both orderings 137, env-free 115, ruff clean.
+
+- **The design turned on something already in the schema.** HSBC's real export has **no header row**, and `_FORMATS` was keyed by header signature, so it could not be matched even in principle — and HSBC is 45% of allocated rows. The obvious move is to sniff content harder. The better one: `imports.source_bank` is **NOT NULL** (`0001_core.sql:293`), so the caller always knows the bank. The registry is now keyed by **name**, `parse_statement(path, *, bank)` requires it, and the header is demoted from *detection* to *verification*. Sniffing must guess; being told cannot. Uploading a Nationwide export under `bank="hsbc"` now raises `StatementFormatMismatchError` instead of feeding the wrong row parser and producing plausible, wrong money.
+- Registered with real sanitised fixtures: **generic, hsbc, nationwide, starling, monzo, mettle**. Nationwide carries every awkwardness at once — `iso-8859-1`, a four-row preamble before its header, `£` inside amounts, `dd Mon yyyy` dates, and money split across `Paid out`/`Paid in`. Its pair collapses to **positive iff `Paid in`**, matching `quarters.py`; a row with neither or both raises rather than guessing.
+- **Two of my own earlier claims corrected:** `_parse_generic_amount` already stripped thousands separators (the survey implied it was a gap), and two existing tests changed *meaning* rather than being weakened — an unrecognised header and an empty file used to mean "no format matches", and now mean "this file is not from the bank you named". Both renamed to say so.
+
+### VERIFICATION TRAP, and it invalidated results before I noticed: stale `__pycache__` silently defeats mutation testing
+
+Mutating `amount_index=4` → `amount_index=5` changes **one character, so the file size is unchanged**, and mutate-run-restore all happen **within the same second**. Python's bytecode cache keys on the source's **mtime truncated to whole seconds, plus its size** — so both were identical and the stale `.pyc` was reused. Two of four mutation results were therefore measured against unmutated bytecode and were **wrong**: they reported the *previous* mutation's failure, which looked plausible enough to accept.
+
+**Always `find src tests -name '__pycache__' -type d -exec rm -rf {} +` between a mutation and its test run.** This matters more here than in most projects, because mutation testing is this project's primary evidence that a guard is real — a false mutation result is worse than none, since it certifies a test that does not discriminate.
+
+**It immediately earned its keep.** Re-run cleanly, `monzo amount_index 7 → 9` left **all 28 tests green**: the fixture's `Amount` and `Local amount` columns held identical values, so reading the wrong one was undetectable — a test passing for the wrong reason, the same class the Step 5 reviewer found. The fixture's first row is now a genuine foreign-currency transaction (`-13.20` GBP against `-15.00` EUR) and the mutation dies. Four mutations now each kill exactly their target: Starling column index, Monzo column index, Nationwide sign flip, Nationwide preamble skip.
+
+**Also, honestly: Starling/Monzo/Mettle were registered before their tests were written**, contrary to the test-first rule. Each assertion was then mutation-verified to establish the discrimination that test-first would have produced — but the order was wrong and is recorded rather than glossed.
+
 ## Session 2026-08-03 — Task 13b Step 5 COMPLETE, and a framework decision
 
 - **Step 5 (nullable fields clearable) DONE**, TDD, `d9f3b4a`-ish. 236 tests, ruff clean, both orderings 136, env-free 100. Full detail and the three mutation results are in the plan's Step 5 outcome block. Headline: emptying `PropertyUpdate._NOT_NULLABLE` turns those 422s into **500s** (`IntegrityError`), so the new `ClassVar` set is proven load-bearing rather than assumed.

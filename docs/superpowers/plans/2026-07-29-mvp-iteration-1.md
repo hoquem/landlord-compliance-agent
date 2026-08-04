@@ -223,7 +223,7 @@ def test_unknown_format_fails_loudly() -> None:
 
 Key the registry by **bank name**, and demote the header from *detection* to *verification*. This is strictly better than sniffing: it dissolves the headerless problem rather than solving it, it makes "you uploaded a Nationwide file and called it HSBC" a loud named error instead of a silent mis-parse, and it removes the ambiguity two banks sharing a header signature would create. Sniffing would have to guess; being told cannot.
 
-- [ ] **Step 1:** Write failing tests for name-keyed dispatch and mismatch detection.
+- [x] **Step 1:** Write failing tests for name-keyed dispatch and mismatch detection.
 
 ```python
 def test_parse_statement_dispatches_on_the_named_bank() -> None:
@@ -246,8 +246,8 @@ def test_header_that_contradicts_the_named_bank_fails_loudly() -> None:
     assert "generic" in str(exc.value)
 ```
 
-- [ ] **Step 2:** Run them. Expect `TypeError: parse_statement() got an unexpected keyword argument 'bank'` for the first two and `NameError` for `StatementFormatMismatchError`.
-- [ ] **Step 3:** Implement. `StatementFormat` gains `name`, an optional `header`, a `header_row`, and an `encoding`; `_FORMATS` is re-keyed by name; `parse_statement` takes `bank`.
+- [x] **Step 2:** Run them. Expect `TypeError: parse_statement() got an unexpected keyword argument 'bank'` for the first two and `NameError` for `StatementFormatMismatchError`.
+- [x] **Step 3:** Implement. `StatementFormat` gains `name`, an optional `header`, a `header_row`, and an `encoding`; `_FORMATS` is re-keyed by name; `parse_statement` takes `bank`.
 
 ```python
 @dataclass(frozen=True)
@@ -271,12 +271,12 @@ class StatementFormat:
     min_columns: int = 1
 ```
 
-- [ ] **Step 4:** Run. Expect PASS. Update the 13 existing call sites in `test_parser.py` to pass `bank="generic"`.
-- [ ] **Step 5:** Commit `refactor: key the statement registry by bank name, not header`.
+- [x] **Step 4:** Run. Expect PASS. Update the 13 existing call sites in `test_parser.py` to pass `bank="generic"`.
+- [x] **Step 5:** Commit `refactor: key the statement registry by bank name, not header`.
 
-- [ ] **Step 5a (CORRECTION 2026-08-04, made while executing):** build the sanitised fixtures **here**, not at Step 12. Steps 6, 8 and 10 all read them, so the original ordering could not run. Content rules unchanged — see Step 12, which now only registers formats.
+- [x] **Step 5a (CORRECTION 2026-08-04, made while executing):** build the sanitised fixtures **here**, not at Step 12. Steps 6, 8 and 10 all read them, so the original ordering could not run. Content rules unchanged — see Step 12, which now only registers formats.
 
-- [ ] **Step 6:** Failing test for per-format encoding, using a **real** sanitised Nationwide export.
+- [x] **Step 6:** Failing test for per-format encoding, using a **real** sanitised Nationwide export.
 
 ```python
 def test_nationwide_is_decoded_as_iso_8859_1() -> None:
@@ -297,9 +297,9 @@ def test_undecodable_bytes_fail_loudly_rather_than_mangling() -> None:
 
 **CORRECTION 2026-08-04, found while executing:** an earlier draft tested this with a fake `nationwide_utf8_probe` registry entry. Wrong twice over. Test-only machinery does not belong in the production registry — and more importantly, **`iso-8859-1` cannot raise `UnicodeDecodeError` at all**: it is a single-byte encoding mapping all 256 values, so every byte sequence decodes. `StatementDecodeError` is reachable only for a **UTF-8** format meeting non-UTF-8 bytes, which is exactly the real-world failure (reading Nationwide's export with the default encoding) and needs no fake entry.
 
-- [ ] **Step 7:** Run (FAIL), implement `encoding` in `path.open(...)` plus a `StatementDecodeError` wrapping `UnicodeDecodeError`, run (PASS), commit.
+- [x] **Step 7:** Run (FAIL), implement `encoding` in `path.open(...)` plus a `StatementDecodeError` wrapping `UnicodeDecodeError`, run (PASS), commit.
 
-- [ ] **Step 8:** Failing test for the preamble skip. Nationwide precedes its header with `"Account Name:"`, `"Account Balance:"`, `"Available Balance: "` and a blank row, so the real header is row index 4.
+- [x] **Step 8:** Failing test for the preamble skip. Nationwide precedes its header with `"Account Name:"`, `"Account Balance:"`, `"Available Balance: "` and a blank row, so the real header is row index 4.
 
 ```python
 def test_nationwide_header_is_found_below_its_preamble() -> None:
@@ -308,9 +308,9 @@ def test_nationwide_header_is_found_below_its_preamble() -> None:
     assert lines[0].description == "Bank credit"
 ```
 
-- [ ] **Step 9:** Implement `header_row` by consuming exactly that many rows before reading the header. **Use an explicit index, not a scan for the first row that looks like a header** — a scan silently picks the wrong row in a file whose preamble happens to resemble data, and silently-wrong is the failure mode this module refuses. Run, PASS, commit.
+- [x] **Step 9:** Implement `header_row` by consuming exactly that many rows before reading the header. **Use an explicit index, not a scan for the first row that looks like a header** — a scan silently picks the wrong row in a file whose preamble happens to resemble data, and silently-wrong is the failure mode this module refuses. Run, PASS, commit.
 
-- [ ] **Step 10:** Failing test for the headerless case (HSBC). Its rows are `30/03/2025,<description>,-150.00` with no header at all.
+- [x] **Step 10:** Failing test for the headerless case (HSBC). Its rows are `30/03/2025,<description>,-150.00` with no header at all.
 
 ```python
 def test_hsbc_has_no_header_row_and_parses_from_line_one() -> None:
@@ -324,14 +324,14 @@ def test_hsbc_thousands_separators_parse_exactly() -> None:
     assert lines[2].amount == Decimal("7422.28")
 ```
 
-- [ ] **Step 11:** Implement: when `header is None`, do not consume a header row, and verify with `min_columns` instead. **`_parse_generic_amount` already strips thousands separators (`parser.py:101`)** — the survey overstated this as a gap; add the test anyway, because it is money and the behaviour must stay pinned. Run, PASS, commit.
+- [x] **Step 11:** Implement: when `header is None`, do not consume a header row, and verify with `min_columns` instead. **`_parse_generic_amount` already strips thousands separators (`parser.py:101`)** — the survey overstated this as a gap; add the test anyway, because it is money and the behaviour must stay pinned. Run, PASS, commit.
 
-- [ ] **Step 12 (fixture content rules — the build itself moved to Step 5a):** the five fixtures come from the real exports listed in `docs/planning/bank-formats.md`. **Keep real dates, amounts and column layout; replace account numbers, balances and counterparty names with plausible substitutes.** `backend/tests/fixtures/statements/` is tracked, and although the repo has no remote today it may gain one.
-- [ ] **Step 13:** Register the five formats with their row parsers. Starling, Monzo and Mettle are single signed-amount formats and need little. Nationwide needs a `paid_out`/`paid_in` pair collapsed to one signed amount, a `£` prefix stripped, and `dd Mon yyyy` dates.
+- [x] **Step 12 (fixture content rules — the build itself moved to Step 5a):** the five fixtures come from the real exports listed in `docs/planning/bank-formats.md`. **Keep real dates, amounts and column layout; replace account numbers, balances and counterparty names with plausible substitutes.** `backend/tests/fixtures/statements/` is tracked, and although the repo has no remote today it may gain one.
+- [x] **Step 13:** Register the five formats with their row parsers. Starling, Monzo and Mettle are single signed-amount formats and need little. Nationwide needs a `paid_out`/`paid_in` pair collapsed to one signed amount, a `£` prefix stripped, and `dd Mon yyyy` dates.
 
 **The sign convention is load-bearing and already pinned elsewhere:** `src/core/quarters.py` derives direction as *positive iff income*, so a two-column format must produce `paid_in` positive and `paid_out` negative. Getting this backwards inverts every export total. Add one test per two-column format asserting both signs.
 
-- [ ] **Step 14:** Verify the whole suite plus both directory orderings and `ruff check`, from `backend/`. Commit.
+- [x] **Step 14:** Verify the whole suite plus both directory orderings and `ruff check`, from `backend/`. Commit.
 
 **Explicitly out of scope** — record rather than absorb:
 - **PDF statements.** Barclays and first direct were supplied as PDFs; see `bank-formats.md` for why a PDF is a worse source than a CSV (no year on dates, sparse dates, inline summary rows), not merely a different one.
