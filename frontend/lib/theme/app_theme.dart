@@ -20,6 +20,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'status_colors.dart';
 import 'tokens.dart';
 
 abstract final class AppTheme {
@@ -110,6 +111,9 @@ abstract final class AppTheme {
           color: palette.textMuted,
         ),
       ),
+      // Registered per brightness, so a screen never has to ask which theme
+      // it is in to colour a status.
+      extensions: <ThemeExtension<dynamic>>[StatusColors.from(palette)],
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: <TargetPlatform, PageTransitionsBuilder>{
           TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),

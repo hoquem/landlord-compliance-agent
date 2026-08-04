@@ -20,6 +20,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:landlord_compliance/app.dart';
 import 'package:landlord_compliance/features/auth/auth_session.dart';
 
+import 'fake_api.dart';
+
 /// An [AuthSession] with no Supabase behind it.
 class FakeAuthSession extends AuthSession {
   FakeAuthSession({bool signedIn = false}) : _signedIn = signedIn;
@@ -72,7 +74,11 @@ Future<void> pumpApp(
   addTearDown(tester.view.reset);
 
   await tester.pumpWidget(
-    LandlordComplianceApp(auth: auth, initialLocation: initialLocation),
+    LandlordComplianceApp(
+      auth: auth,
+      api: FakeApiClient(),
+      initialLocation: initialLocation,
+    ),
   );
   await tester.pumpAndSettle();
 }

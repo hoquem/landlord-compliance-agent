@@ -289,3 +289,26 @@ async def test_get_imports_lists_with_status(org_user: OrgUser) -> None:
     resp = await as_user(org_user, "GET", "/imports")
     assert resp.status_code == 200, resp.text
     assert {row["status"] for row in resp.json()} == {"parsed", "failed"}
+
+
+async def test_the_bank_list_comes_from_the_parser_registry(org_user: OrgUser) -> None:
+    """The upload form must not hard-code which banks exist.
+
+    A second copy of the list in the frontend would drift the moment a format
+    is added, and the failure mode is offering the user a bank the parser
+    then refuses. Compared against ``registered_banks()`` itself rather than
+    a hand-typed list, so there is one definition and no way to update one
+    place only.
+    """
+    from src.core.parser import registered_banks
+
+    resp = await as_user(org_user, "GET", "/banks")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == registered_banks()
+    assert "barclays" in resp.json()
+
+
+async def test_the_bank_list_needs_a_token() -> None:
+    """Behind auth: an anonymous caller enumerates nothing."""
+    assert (await call("GET", "/banks")).status_code == 401

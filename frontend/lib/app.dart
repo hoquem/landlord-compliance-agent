@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'api/api_client.dart';
 import 'app/app_router.dart';
 import 'features/auth/auth_session.dart';
 import 'theme/app_theme.dart';
@@ -15,11 +16,13 @@ import 'theme/app_theme.dart';
 class LandlordComplianceApp extends StatefulWidget {
   const LandlordComplianceApp({
     required this.auth,
+    required this.api,
     this.initialLocation = '/',
     super.key,
   });
 
   final AuthSession auth;
+  final ApiClient api;
   final String initialLocation;
 
   @override
@@ -29,6 +32,7 @@ class LandlordComplianceApp extends StatefulWidget {
 class _LandlordComplianceAppState extends State<LandlordComplianceApp> {
   late final GoRouter _router = buildRouter(
     auth: widget.auth,
+    api: widget.api,
     initialLocation: widget.initialLocation,
   );
 

@@ -542,6 +542,17 @@ def is_registered_bank(bank: str) -> bool:
     return bank in _FORMATS
 
 
+def registered_banks() -> list[str]:
+    """Every bank name :func:`parse_statement` accepts, sorted.
+
+    Public so the API can offer the list to an upload form without reaching
+    into ``_FORMATS``, and so the set has exactly one definition.
+
+    :returns: registered bank names, alphabetically.
+    """
+    return sorted(_FORMATS)
+
+
 def _normalise_header(header: list[str]) -> tuple[str, ...]:
     """Normalise a raw header row for format matching: strip + casefold each cell."""
     return tuple(cell.strip().casefold() for cell in header)

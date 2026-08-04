@@ -52,6 +52,7 @@ from src.core.parser import (
     UnknownStatementFormatError,
     is_registered_bank,
     parse_statement,
+    registered_banks,
 )
 from src.db.models import Entity, Import, JobQueue, Transaction
 from src.db.session import async_session_factory
@@ -207,6 +208,25 @@ async def create_import(
         created = ImportRead.model_validate(record)
         await session.commit()
     return created
+
+
+@router.get("/banks")
+async def list_banks(auth: CurrentAuth) -> list[str]:
+    """List the statement formats the parser can read.
+
+    Exists so the upload form does not hard-code the list. ``core.parser``'s
+    registry is the source of truth for which banks can be parsed, and a
+    second copy in Dart would drift the moment a format is added -- offering
+    the user a bank the parser would then refuse.
+
+    Not org-scoped: the registry is a property of the software, not of a
+    tenant. Still behind auth, because an unauthenticated caller has no
+    business enumerating anything.
+
+    :param auth: the authenticated caller.
+    :returns: registered bank names, alphabetically.
+    """
+    return registered_banks()
 
 
 @router.get("/imports")

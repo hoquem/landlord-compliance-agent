@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:landlord_compliance/theme/app_theme.dart';
+import 'package:landlord_compliance/api/models.dart';
+import 'package:landlord_compliance/theme/status_colors.dart';
 import 'package:landlord_compliance/theme/tokens.dart';
 
 /// WCAG 2.1 relative luminance.
@@ -158,6 +160,44 @@ void main() {
       ];
       for (int i = 1; i < sizes.length; i++) {
         expect(sizes[i], greaterThan(sizes[i - 1]));
+      }
+    });
+  });
+
+  group('Status colours', () {
+    test('only needs-you and wrong carry chroma', () {
+      // The mechanism behind the core loop's reward: a review queue drains
+      // of colour as it is cleared, because settled work stops asking for
+      // attention. Giving `settled` a green -- the RAG reflex the plan
+      // originally called for -- would make a finished queue as loud as an
+      // unfinished one.
+      //
+      // Asserted against the palette's own neutrals rather than against the
+      // token's value, which would be tautological. Measured: comparing
+      // rendered colour to token left a green `settled` passing.
+      for (final Palette palette in <Palette>[Palette.dark, Palette.light]) {
+        final StatusColors colors = StatusColors.from(palette);
+        for (final WorkState quiet in <WorkState>[
+          WorkState.working,
+          WorkState.settled,
+          WorkState.setAside,
+        ]) {
+          expect(
+            palette.neutrals,
+            contains(colors.of(quiet)),
+            reason: '$quiet must be a neutral, not a colour of its own',
+          );
+        }
+        expect(colors.needsYou, palette.accent);
+        expect(colors.wrong, palette.danger);
+        expect(palette.neutrals, isNot(contains(colors.needsYou)));
+        expect(palette.neutrals, isNot(contains(colors.wrong)));
+      }
+    });
+
+    test('every state resolves to a colour', () {
+      for (final WorkState state in WorkState.values) {
+        expect(StatusColors.from(Palette.dark).of(state), isNotNull);
       }
     });
   });

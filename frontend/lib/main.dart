@@ -17,19 +17,22 @@ library;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'api/http_api_client.dart';
 import 'app.dart';
 import 'features/auth/supabase_auth_session.dart';
 
 const String _supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String _supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+const String _apiBaseUrl = String.fromEnvironment('API_BASE_URL');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (_supabaseUrl.isEmpty || _supabaseAnonKey.isEmpty) {
+  if (_supabaseUrl.isEmpty || _supabaseAnonKey.isEmpty || _apiBaseUrl.isEmpty) {
     throw StateError(
-      'SUPABASE_URL and SUPABASE_ANON_KEY must be passed with --dart-define. '
-      'Run `make web` from the repo root, which reads them from .env.',
+      'SUPABASE_URL, SUPABASE_ANON_KEY and API_BASE_URL must be passed with '
+      '--dart-define. Run `make web` from the repo root, which supplies all '
+      'three.',
     );
   }
 
@@ -42,7 +45,17 @@ Future<void> main() async {
     publishableKey: _supabaseAnonKey,
   );
 
+  final SupabaseClient client = Supabase.instance.client;
   runApp(
-    LandlordComplianceApp(auth: SupabaseAuthSession(Supabase.instance.client)),
+    LandlordComplianceApp(
+      auth: SupabaseAuthSession(client),
+      api: HttpApiClient(
+        baseUrl: _apiBaseUrl,
+        // Read per request, not captured: Supabase refreshes the session in
+        // the background, and a captured token goes stale as a 401 on a
+        // screen that worked a minute ago.
+        accessToken: () => client.auth.currentSession?.accessToken,
+      ),
+    ),
   );
 }

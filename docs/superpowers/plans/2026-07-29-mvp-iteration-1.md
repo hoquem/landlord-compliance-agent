@@ -654,7 +654,7 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
 ### Task 20: Upload & imports screen
 
 - Files: `frontend/lib/features/upload/`
-- [ ] File-pick CSV → `POST /imports`; list imports with status chips; **failed imports show the row-level error prominently** (spec: import failure UX matters more than format coverage); staggered list entrance (`flutter_animate`, `Motion.standard`). Widget test with mocked API client. Commit.
+- [x] File-pick CSV → `POST /imports`; list imports with status chips; **failed imports show the row-level error prominently** (spec: import failure UX matters more than format coverage); staggered list entrance (`flutter_animate`, `Motion.standard`). Widget test with mocked API client. Commit.
 
 ### Task 21: Review screen (the core UX)
 

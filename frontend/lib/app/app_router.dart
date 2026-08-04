@@ -16,6 +16,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../api/api_client.dart';
 import '../features/auth/auth_session.dart';
 import '../features/auth/sign_in_screen.dart';
 import '../features/certificates/certificates_screen.dart';
@@ -31,6 +32,7 @@ const String kFromParam = 'from';
 
 GoRouter buildRouter({
   required AuthSession auth,
+  required ApiClient api,
   String initialLocation = '/',
 }) {
   return GoRouter(
@@ -82,7 +84,7 @@ GoRouter buildRouter({
           GoRoute(
             path: '/imports',
             builder: (BuildContext context, GoRouterState state) =>
-                const ImportsScreen(),
+                ImportsScreen(api: api),
           ),
           GoRoute(
             path: '/review',
