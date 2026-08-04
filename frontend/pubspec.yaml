@@ -68,6 +68,10 @@ flutter:
   # 782 KB gzipped in a real web build, and subsetting to Latin is a known,
   # untaken optimisation.
   # Licence: SIL Open Font License 1.1, shipped at assets/fonts/LICENSE.txt.
+  #
+  # NOTE (measured 2026-08-04): this removes *a* Google request, not all of
+  # them. A built web app still fetches canvaskit from www.gstatic.com and a
+  # Roboto woff2 from fonts.gstatic.com. See DESIGN.md.
   fonts:
     - family: Inter
       fonts:

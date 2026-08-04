@@ -1,5 +1,50 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — Phase 7 begun, and a privacy claim caught wrong
+
+Design language decided (`PRODUCT.md`, `DESIGN.md`), theme rebuilt to it,
+Task 19 landed: Google-only sign-in, go_router guard, nav rail, placeholders.
+36 Flutter tests, analyze clean, `flutter build web` succeeds.
+
+**The finding that matters, from running it rather than reading it.** A built
+web app contacts Google three times on every load: `canvaskit.wasm` and
+`canvaskit.js` from `www.gstatic.com`, and a Roboto `woff2` from
+`fonts.gstatic.com`. Measured with
+`performance.getEntriesByType('resource')` in Chrome against the real build.
+
+I had reasoned my way to bundling Inter *specifically* to keep the user's IP
+off Google's CDN on a page showing bank transactions — and then asserted that
+outcome in **four places** (`DESIGN.md`, `pubspec.yaml`, `tokens.dart`, commit
+`009da2d`) without ever loading the page. The reasoning was right and the
+conclusion was incomplete: I closed one hole in a wall with three.
+
+Cause is exact, not guessed: `flutter_tools/lib/src/build_system/targets/web.dart:111-119`
+injects `FLUTTER_WEB_CANVASKIT_URL=https://www.gstatic.com/flutter-canvaskit/...`
+unless `--dart-define=UseLocalCanvasKit=true` — while `flutter build web`
+already copies CanvasKit into `build/web/canvaskit/`. The bytes ship and go
+unused.
+
+**Not yet fixed** (the user asked for a review, not a fix). Three files are
+corrected to say what is true; the commit stands per the no-amend rule. The
+fix is one define plus a re-measure, because whether it also removes the
+Roboto fetch is unverified.
+
+**Where the test goes: Task 23's E2E smoke** — assert the app requests no
+external origins. A widget test cannot see this; that is precisely why four
+documents could claim it and be wrong.
+
+**Also corrected: the weight framing was upside down.** Inter's 782 KB gzipped
+was flagged in DESIGN.md; `canvaskit.wasm` is 5.6 MB and went unmeasured.
+
+**Fourth instance today of the same pattern** — asserting a behaviour in a
+comment without enforcing it. The others: the deep-link test that passed
+because "Certificates" is also a nav label; the SKIP LOCKED test that passed
+under plain FOR UPDATE; the status-boundary tests that moved with their own
+constant. Mutation testing caught three of them. Only *running the app*
+caught this one, which is the lesson: mutation testing proves a test
+discriminates, not that the claim was ever checked against reality.
+
+
 ## Session 2026-08-04 — Barclays registered, Task 18 COMPLETE (worker)
 
 **Barclays.** Mahmud supplied `data.csv`, closing the last real format gap.

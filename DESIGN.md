@@ -242,9 +242,23 @@ project already disables CrewAI telemetry for exactly that reason; fetching
 a font is the same class of leak with a friendlier name.
 
 It is not free: four static weights measure **782 KB gzipped** in a real
-`flutter build web`. Subsetting to Latin would cut most of that and is a
-known, untaken optimisation — recorded here rather than left as a surprise
-for whoever profiles the first load.
+`flutter build web`, and Flutter preloads all four even on the sign-in
+screen. Subsetting to Latin would cut most of that. Keep it in proportion
+though: `canvaskit.wasm` is **5.6 MB**, so the font is not where the weight
+conversation lives.
+
+**Measured 2026-08-04, and it corrects the paragraph above.** Bundling Inter
+removes *a* Google request, not *the* Google requests. A real
+`flutter build web` still fetches three things from Google on every load:
+`canvaskit.wasm` and `canvaskit.js` from `www.gstatic.com`, and a Roboto
+`woff2` from `fonts.gstatic.com`. The Flutter tool injects
+`FLUTTER_WEB_CANVASKIT_URL=https://www.gstatic.com/...` unless
+`--dart-define=UseLocalCanvasKit=true` is passed — while already copying
+CanvasKit into `build/web/canvaskit/`, so the bytes ship and go unused. Until
+that define is set and the result re-measured, **this page contacts Google on
+load and the claim above is incomplete.** Tracked as the top item in the
+2026-08-04 critique.
+
 
 Scale, fixed (never fluid), ratio ≈1.15–1.25:
 

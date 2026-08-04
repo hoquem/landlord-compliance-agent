@@ -158,6 +158,11 @@ abstract final class AppType {
   /// request carrying the user's IP on a page displaying their bank
   /// transactions. This repo already disables CrewAI telemetry for exactly
   /// that reason; a font fetch is the same class of leak.
+  ///
+  /// **Necessary, not sufficient — measured 2026-08-04.** A built web app
+  /// still contacts `www.gstatic.com` for CanvasKit and `fonts.gstatic.com`
+  /// for a Roboto fallback. Bundling this font closes one hole in a wall
+  /// that has three. See DESIGN.md.
   static const String family = 'Inter';
 
   /// Digits that share a column, and a zero that can never be an O.
