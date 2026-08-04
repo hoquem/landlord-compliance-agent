@@ -12,6 +12,8 @@
 // refuses unauthenticated requests independently, so a hole here leaks an
 // empty shell rather than data, but a shell that renders for a signed-out
 // user is still a bug the user would see and not trust.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,9 +36,19 @@ class FakeAuthSession extends AuthSession {
   @override
   bool get isSignedIn => _signedIn;
 
+  /// When set, sign-in throws this instead of succeeding.
+  Object? failWith;
+
+  /// Completed by the test to control when sign-in resolves, so the pending
+  /// state can be observed. Without it the future resolves immediately and
+  /// there is nothing to see.
+  Completer<void>? gate;
+
   @override
   Future<void> signInWithGoogle() async {
     signInRequests++;
+    if (gate != null) await gate!.future;
+    if (failWith != null) throw failWith!;
     _signedIn = true;
     notifyListeners();
   }
@@ -119,6 +131,92 @@ void main() {
       );
       expect(node, isNotNull);
       expect(node!.hasFocus, isTrue);
+    });
+
+    testWidgets('pressing the button shows that something is happening', (
+      tester,
+    ) async {
+      // OAuth is a full-page redirect, so without this the user presses a
+      // button and the screen sits there looking broken until the browser
+      // decides to navigate.
+      final FakeAuthSession auth = FakeAuthSession()..gate = Completer<void>();
+      await pumpApp(tester, auth);
+
+      await tester.tap(find.text('Continue with Google'));
+      await tester.pump();
+
+      expect(find.text('Opening Google'), findsOneWidget);
+      expect(find.text('Continue with Google'), findsNothing);
+    });
+
+    testWidgets('a second press while pending does not sign in twice', (
+      tester,
+    ) async {
+      final FakeAuthSession auth = FakeAuthSession()..gate = Completer<void>();
+      await pumpApp(tester, auth);
+
+      await tester.tap(find.text('Continue with Google'));
+      await tester.pump();
+      await tester.tap(find.byType(FilledButton), warnIfMissed: false);
+      await tester.pump();
+
+      expect(auth.signInRequests, 1);
+    });
+
+    testWidgets('a failure says what happened and what to do', (tester) async {
+      // The backend fails loudly on purpose; the UI has to carry that
+      // specificity through rather than flattening it to "an error occurred".
+      final FakeAuthSession auth = FakeAuthSession()
+        ..failWith = StateError('network unreachable');
+      await pumpApp(tester, auth);
+
+      await tester.tap(find.text('Continue with Google'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('network unreachable'), findsOneWidget);
+      expect(find.textContaining('try again'), findsOneWidget);
+    });
+
+    testWidgets('after a failure the button works again', (tester) async {
+      // An error state you cannot leave is worse than no error state.
+      final FakeAuthSession auth = FakeAuthSession()
+        ..failWith = StateError('nope');
+      await pumpApp(tester, auth);
+
+      await tester.tap(find.text('Continue with Google'));
+      await tester.pumpAndSettle();
+      auth.failWith = null;
+
+      await tester.tap(find.text('Continue with Google'));
+      await tester.pumpAndSettle();
+
+      expect(auth.signInRequests, 2);
+      expect(find.byType(NavigationRail), findsOneWidget);
+    });
+
+    testWidgets('the doorway survives a narrow window', (tester) async {
+      // 64px of horizontal inset plus a 52px wordmark leaves little room on
+      // a phone-width viewport. Flutter fails a test on overflow, so this
+      // asserts by not throwing -- which is the only assertion that catches
+      // a layout that is merely ugly rather than wrong.
+      await pumpApp(
+        tester,
+        FakeAuthSession(),
+        size: const Size(390, 700),
+      );
+
+      expect(find.text('Continue with Google'), findsOneWidget);
+      expect(find.text('Landlord Compliance'), findsOneWidget);
+    });
+
+    testWidgets('the wordmark carries the screen', (tester) async {
+      // "One confident element". A 380px column centred in a 1440px void was
+      // the diagnosed problem; the fix is a wordmark with real presence, so
+      // its size is pinned rather than left to drift back to body scale.
+      await pumpApp(tester, FakeAuthSession());
+
+      final Text wordmark = tester.widget(find.text('Landlord Compliance'));
+      expect(wordmark.style!.fontSize, greaterThanOrEqualTo(44));
     });
   });
 

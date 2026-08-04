@@ -174,6 +174,20 @@ abstract final class AppType {
     FontFeature.slashedZero(),
   ];
 
+  /// The wordmark on the sign-in screen, and nowhere else.
+  ///
+  /// Larger than anything in the product proper, because the doorway is the
+  /// one surface with no task on it: there is nothing to be dense for. It
+  /// exists as a token rather than an inline size so the rule "screens
+  /// consume tokens" has no exception to argue from.
+  static const TextStyle wordmark = TextStyle(
+    fontFamily: family,
+    fontSize: 52,
+    height: 1.05,
+    fontWeight: FontWeight.w300,
+    letterSpacing: -1.4,
+  );
+
   /// Moments only: a cleared queue, a filed export. Nowhere else.
   static const TextStyle display = TextStyle(
     fontFamily: family,

@@ -31,6 +31,18 @@ CanvasKit is self-hosted via a new `web/flutter_bootstrap.js` setting
 the bootstrap's `fontFallbackBaseUrl` (which would require vendoring the
 fallback files at Flutter's expected path structure).
 
+**Sign-in screen completed** after the critique scored it 1/4 on visibility
+of status and 0/4 on error recovery. Composition anchored left with a 52px
+wordmark instead of a 380px column centred in a void; the button now sizes to
+its content, which also cuts the accent area from a gold slab to a fraction
+of the surface. Three states, because an OAuth redirect is invisible:
+`Opening Google` while pending, and a failure that quotes the reason and says
+what to do. Six new tests; the narrow-viewport one was mutation-checked
+(squeezing the inset to 185px on a 390px viewport fails it) because a test
+that only asserts "did not throw" is worth nothing until you have seen it
+throw. **The error state is unit-tested but never seen** — forcing a real
+OAuth failure would need a live redirect, so it stays on trust.
+
 **Both dart-defines I first reached for were wrong**, and I only knew because
 I re-measured: neither `UseLocalCanvasKit=true` nor
 `FLUTTER_WEB_CANVASKIT_URL=...` changes anything, because the *runtime*
