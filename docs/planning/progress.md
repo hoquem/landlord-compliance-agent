@@ -1,5 +1,72 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — Task 23 COMPLETE (E2E smoke)
+
+One test, `backend/tests/e2e/test_smoke.py`, walks a CSV from upload to a
+filed quarter and reads the money back out through the signed-download path.
+463 backend tests, ruff clean. Run in both directory orderings, because a
+single-directory run cannot show the pooled-connection asymmetry Task 13a was
+bitten by.
+
+**The seam is one level deeper than `tests/worker/test_poller.py`'s.** That
+suite replaces the whole `CategoriseStatementFlow`, because its subject is the
+worker and it needs to inspect the inputs the worker built. Here the flow is
+part of what is under test, so only `crewai.Agent` is replaced: the flow's
+input validation, its prompt, and its output-contract check all run for real,
+and `_build_llm` still constructs a real `LLM` (verified offline-safe before
+relying on it). `CATEGORISER_MODEL` is set by the fixture — that is
+configuration, not mocking, and `.env` still lacks it (flagged in the
+2026-08-02/03 entry and still true).
+
+**The stub answers from the prompt, not positionally.** It maps description →
+category and takes the property id out of the prompt's property block. Two
+gains over a positional list: it cannot silently mis-attach if row ordering
+changes, and it *proves* `_build_prompt` carries the lines and the property
+list, which nothing asserted before.
+
+**The fixture's amounts are chosen, not arbitrary.** 60/40 ownership, with a
+leftover penny going to the 60% owner on the rent (1350.01 → 810.01/540.00)
+and to the 40% owner on the repair (84.99 → 50.99/34.00) — opposite
+directions, so a ranking bug cannot cancel out. A £25 refund *in* against an
+expense category pins the sign rule. A `personal_non_business` line pins the
+drop; an excluded line pins the exclusion; a line with no property pins the
+fall back to `transactions.entity_id`.
+
+**Latent flake avoided by construction, and written into the module docstring
+so the next person does not reintroduce it:** `split_amount` breaks a
+remainder tie on ascending owner UUID, and entity ids are random per run. Any
+amount whose two owners have *equal* remainders **and** a penny to hand out
+would pass about half the time. Every amount in the fixture either has
+unequal remainders or nothing left over.
+
+**Two mutations run, both die on the figures in the downloaded CSV** — which
+is the point, since a test whose numbers are decorative would survive them:
+- Reversing `split_amount`'s remainder ranking (`(-remainders[o], o)` →
+  `(remainders[o], o)`): 810.01 → 810.00 and 35.99 → 36.00. The sum invariant
+  still holds, so `split_amount`'s own postcondition does *not* catch this.
+- Dropping the category from `signed_amount`: 35.99 → −35.99, 200.00 →
+  −200.00. The refund stops reducing the expense.
+
+Deleting the leftover-penny distribution entirely was *not* used as evidence:
+`split_amount`'s postcondition raises `RuntimeError` first, so the test dies
+as a 500 rather than on its figures, and it would prove nothing about them.
+
+**The "no external origin" assertion I said would live here does not belong
+here.** A backend pytest cannot observe the Flutter web bundle. It wants a
+`make` target grepping `frontend/build/web` after a build — noted for Task 24,
+not silently substituted with something weaker.
+
+**Also asserted end to end:** exporting while lines are still `proposed` is a
+422 naming the blocking ids (refusing to export is a feature); the PDF really
+renders through WeasyPrint (`%PDF-` magic bytes, fetched from storage); the
+two owners' totals sum back to the undivided amounts; and the `mtd_quarters`
+row carries `capital_expense_total = 0.00` rather than leaving it absent.
+
+**One trap the review caught before it was written:** `ConfirmBody.property_id`
+defaults to `None` and `_apply_confirm` assigns it unconditionally, so a batch
+item that omits it *wipes* the proposed attribution — silently moving money to
+the wrong owner. The batch sends it explicitly, with a comment saying why.
+
 ## Session 2026-08-04 (cont.) — Phase 7 COMPLETE (Tasks 20, 21, 22)
 
 Every screen in the MVP now exists. 462 backend tests, 101 Flutter tests,
