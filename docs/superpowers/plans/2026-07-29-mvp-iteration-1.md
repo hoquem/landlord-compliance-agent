@@ -274,7 +274,9 @@ class StatementFormat:
 - [ ] **Step 4:** Run. Expect PASS. Update the 13 existing call sites in `test_parser.py` to pass `bank="generic"`.
 - [ ] **Step 5:** Commit `refactor: key the statement registry by bank name, not header`.
 
-- [ ] **Step 6:** Failing test for per-format encoding, using a **real** Nationwide export (sanitised — see Step 12).
+- [ ] **Step 5a (CORRECTION 2026-08-04, made while executing):** build the sanitised fixtures **here**, not at Step 12. Steps 6, 8 and 10 all read them, so the original ordering could not run. Content rules unchanged — see Step 12, which now only registers formats.
+
+- [ ] **Step 6:** Failing test for per-format encoding, using a **real** sanitised Nationwide export.
 
 ```python
 def test_nationwide_is_decoded_as_iso_8859_1() -> None:
@@ -282,11 +284,18 @@ def test_nationwide_is_decoded_as_iso_8859_1() -> None:
     lines = parse_statement(FIXTURES / "nationwide.csv", bank="nationwide")
     assert lines[0].amount == Decimal("1000.00")
 
-def test_wrong_encoding_fails_loudly_rather_than_mangling() -> None:
-    """A decode failure must raise, never substitute replacement characters."""
+def test_undecodable_bytes_fail_loudly_rather_than_mangling() -> None:
+    """A decode failure must raise, never substitute replacement characters.
+
+    The generic format is utf-8-sig, and the Nationwide fixture is
+    iso-8859-1, so reading one as the other is a genuine decode failure --
+    and it happens while reading, before header verification.
+    """
     with pytest.raises(StatementDecodeError):
-        parse_statement(FIXTURES / "nationwide.csv", bank="nationwide_utf8_probe")
+        parse_statement(FIXTURES / "nationwide.csv", bank="generic")
 ```
+
+**CORRECTION 2026-08-04, found while executing:** an earlier draft tested this with a fake `nationwide_utf8_probe` registry entry. Wrong twice over. Test-only machinery does not belong in the production registry — and more importantly, **`iso-8859-1` cannot raise `UnicodeDecodeError` at all**: it is a single-byte encoding mapping all 256 values, so every byte sequence decodes. `StatementDecodeError` is reachable only for a **UTF-8** format meeting non-UTF-8 bytes, which is exactly the real-world failure (reading Nationwide's export with the default encoding) and needs no fake entry.
 
 - [ ] **Step 7:** Run (FAIL), implement `encoding` in `path.open(...)` plus a `StatementDecodeError` wrapping `UnicodeDecodeError`, run (PASS), commit.
 
@@ -317,7 +326,7 @@ def test_hsbc_thousands_separators_parse_exactly() -> None:
 
 - [ ] **Step 11:** Implement: when `header is None`, do not consume a header row, and verify with `min_columns` instead. **`_parse_generic_amount` already strips thousands separators (`parser.py:101`)** — the survey overstated this as a gap; add the test anyway, because it is money and the behaviour must stay pinned. Run, PASS, commit.
 
-- [ ] **Step 12:** Build the five sanitised fixtures from the real exports listed in `docs/planning/bank-formats.md`. **Keep real dates, amounts and column layout; replace account numbers, balances and counterparty names with plausible substitutes.** `backend/tests/fixtures/statements/` is tracked, and although the repo has no remote today it may gain one.
+- [ ] **Step 12 (fixture content rules — the build itself moved to Step 5a):** the five fixtures come from the real exports listed in `docs/planning/bank-formats.md`. **Keep real dates, amounts and column layout; replace account numbers, balances and counterparty names with plausible substitutes.** `backend/tests/fixtures/statements/` is tracked, and although the repo has no remote today it may gain one.
 - [ ] **Step 13:** Register the five formats with their row parsers. Starling, Monzo and Mettle are single signed-amount formats and need little. Nationwide needs a `paid_out`/`paid_in` pair collapsed to one signed amount, a `£` prefix stripped, and `dd Mon yyyy` dates.
 
 **The sign convention is load-bearing and already pinned elsewhere:** `src/core/quarters.py` derives direction as *positive iff income*, so a two-column format must produce `paid_in` positive and `paid_out` negative. Getting this backwards inverts every export total. Add one test per two-column format asserting both signs.

@@ -1,0 +1,8 @@
+Account Name:,FlexDirect Account ****00000
+Account Balance:,£1234.56
+Available Balance: ,£1234.56
+
+Date,Transaction type,Description,Paid out,Paid in,Balance
+28 Oct 2024,Bank credit,A Sender,,£1000.00,£4242.42
+28 Oct 2024,Visa cash withdrawal,SAMPLE ATM ABROAD,£63.43,,£8370.21
+29 Oct 2024,Direct debit,SAMPLE UTILITIES,£79.04,,£8291.17
