@@ -367,6 +367,61 @@ CATEGORY_COLUMNS: dict[HmrcCategory, str] = {
 }
 
 
+#: The reverse of :data:`CATEGORY_COLUMNS`, built from it rather than
+#: written out, so the two cannot disagree.
+_COLUMN_CATEGORIES: dict[str, HmrcCategory] = {
+    column: category for category, column in CATEGORY_COLUMNS.items()
+}
+
+
+def totals_to_columns(totals: Mapping[HmrcCategory, Decimal]) -> dict[str, Decimal]:
+    """Turn category totals into a full set of ``mtd_quarters`` column values.
+
+    **Every** reportable column is present, absent categories as ``0.00``.
+    An ``mtd_quarters`` row is a complete statement of what was filed, and
+    leaving a column to its database default would make "nothing was spent
+    on repairs" indistinguishable from "repairs were left out" -- and would
+    only work on insert, never on a re-read.
+
+    :param totals: per-category totals, typically from
+        :func:`~src.core.quarters.cumulative_totals`.
+    :raises ValueError: if a category with no column is present.
+        :func:`~src.core.quarters.cumulative_totals` drops
+        ``personal_non_business`` by definition, so seeing it here is not a
+        number to store -- it is evidence the totals came from somewhere
+        else.
+    :returns: ``column name -> value`` for every reportable category.
+    """
+    unstorable = sorted(c.value for c in totals if c not in CATEGORY_COLUMNS)
+    if unstorable:
+        raise ValueError(
+            f"no mtd_quarters column for {', '.join(unstorable)}; these categories are "
+            "never reported to HMRC and must not reach an export"
+        )
+    return {
+        column: totals.get(category, Decimal("0.00"))
+        for category, column in CATEGORY_COLUMNS.items()
+    }
+
+
+def totals_from_columns(columns: Mapping[str, Decimal]) -> dict[HmrcCategory, Decimal]:
+    """Read a stored ``mtd_quarters`` row back into category totals.
+
+    The inverse of :func:`totals_to_columns`, and the input
+    :func:`assert_history_intact` compares against. Columns that are not
+    category totals (``id``, ``version``, and the rest of the row) are
+    ignored, so a whole row can be handed in as-is.
+
+    :param columns: a stored row, or at least its ``*_total`` columns.
+    :returns: ``category -> total`` for every reportable category, missing
+        columns read as ``0.00``.
+    """
+    return {
+        category: columns.get(column, Decimal("0.00"))
+        for column, category in _COLUMN_CATEGORIES.items()
+    }
+
+
 class CumulativeDecreaseError(Exception):
     """Raised when an already-filed quarter no longer recomputes to what was filed.
 

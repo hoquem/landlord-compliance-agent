@@ -34,6 +34,8 @@ from src.core.export_pack import (
     quarter_label,
     quarter_number,
     signed_amount,
+    totals_from_columns,
+    totals_to_columns,
 )
 
 ENTITY = uuid.uuid4()
@@ -397,3 +399,64 @@ def test_a_transaction_added_to_a_filed_quarter_also_raises() -> None:
         )
     assert exc.value.stored == Decimal("1200.00")
     assert exc.value.recomputed == Decimal("1500.00")
+
+
+# ---------------------------------------------------------------------------
+# The `mtd_quarters` column mapping, in both directions.
+#
+# This is the seam between the pure core and the database row, and it is the
+# only place a category can silently fall out of a filed return. Both
+# directions live next to `CATEGORY_COLUMNS` so a category added to the enum
+# breaks them together rather than one at a time.
+# ---------------------------------------------------------------------------
+def test_totals_to_columns_states_every_reportable_category() -> None:
+    """A category absent from the totals is stored as 0.00, not omitted.
+
+    An `mtd_quarters` row is a full statement of what was filed. Leaving a
+    column to its DB default would make "we filed nothing under repairs"
+    indistinguishable from "we forgot repairs", and only on insert.
+    """
+    columns = totals_to_columns({HmrcCategory.RENT_INCOME: Decimal("1200.00")})
+
+    assert set(columns) == set(CATEGORY_COLUMNS.values())
+    assert columns["rent_income_total"] == Decimal("1200.00")
+    assert columns["repairs_maintenance_total"] == Decimal("0.00")
+
+
+def test_totals_to_columns_refuses_a_category_with_no_column() -> None:
+    """`personal_non_business` reaching an export means something upstream broke.
+
+    `cumulative_totals` drops it by definition, so its presence here is not a
+    number to store -- it is evidence the totals did not come from there.
+    """
+    with pytest.raises(ValueError, match="personal_non_business"):
+        totals_to_columns({HmrcCategory.PERSONAL_NON_BUSINESS: Decimal("50.00")})
+
+
+def test_totals_from_columns_reads_a_stored_row_back() -> None:
+    """A stored row maps back to the category totals the guard compares."""
+    stored = totals_from_columns(
+        {col: Decimal("0.00") for col in CATEGORY_COLUMNS.values()}
+        | {"rent_income_total": Decimal("1200.00")}
+    )
+
+    assert set(stored) == set(CATEGORY_COLUMNS)
+    assert stored[HmrcCategory.RENT_INCOME] == Decimal("1200.00")
+
+
+def test_column_mapping_round_trips() -> None:
+    """What was written is what is read back -- the guard depends on it.
+
+    If these two drifted, `assert_history_intact` would compare today's
+    figures against a mis-read row and raise on an export that is fine.
+    """
+    totals = {
+        HmrcCategory.RENT_INCOME: Decimal("1200.00"),
+        HmrcCategory.REPAIRS_MAINTENANCE: Decimal("-84.99"),
+    }
+
+    read_back = totals_from_columns(totals_to_columns(totals))
+
+    assert read_back[HmrcCategory.RENT_INCOME] == Decimal("1200.00")
+    assert read_back[HmrcCategory.REPAIRS_MAINTENANCE] == Decimal("-84.99")
+    assert all(read_back[c] == Decimal("0.00") for c in CATEGORY_COLUMNS if c not in totals)
