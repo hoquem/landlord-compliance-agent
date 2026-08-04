@@ -43,7 +43,8 @@ worker:  ## Run the job-queue worker
 FLUTTER_DEFINES = \
 	--web-port 3000 \
 	--dart-define=SUPABASE_URL=$(shell grep '^SUPABASE_URL=' .env | cut -d= -f2-) \
-	--dart-define=SUPABASE_ANON_KEY=$(shell grep '^SUPABASE_ANON_KEY=' .env | cut -d= -f2-)
+	--dart-define=SUPABASE_ANON_KEY=$(shell grep '^SUPABASE_ANON_KEY=' .env | cut -d= -f2-) \
+	--dart-define=API_BASE_URL=http://127.0.0.1:8000
 
 web:  ## Run the Flutter app in Chrome on :3000
 	cd frontend && flutter run -d chrome $(FLUTTER_DEFINES)

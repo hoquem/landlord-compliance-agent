@@ -1,5 +1,71 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — Phase 7 COMPLETE (Tasks 20, 21, 22)
+
+Every screen in the MVP now exists. 462 backend tests, 101 Flutter tests,
+ruff and `flutter analyze` clean, `flutter build web` succeeds.
+
+**Infrastructure Phase 7 could not start without**, built as part of Task 20:
+an `ApiClient` seam (abstract, so screens are testable with no network), wire
+models, and the `StatusColors` `ThemeExtension` the plan had scheduled for
+Task 22.
+
+**Four deliberate deviations from the plan, all because DESIGN.md is newer
+and Mahmud approved it.** Recorded here so nobody later reads the plan as
+unimplemented:
+
+1. **No staggered list entrance** (Task 20). Motion marks state changes, not
+   arrivals; there is no page-load choreography.
+2. **Five-state vocabulary replaces RAG** (Task 22's prerequisite). Only
+   `needs-you` and `wrong` carry chroma. A green "settled" would make a
+   finished queue as loud as an unfinished one — the queue draining of
+   colour *is* the reward.
+3. **Category picker is a popover, not a bottom sheet** (Task 21), and
+   **low confidence is weight and word, not an amber pulse**. A
+   low-confidence proposal is not an error.
+4. **Dashboard is an attention list, not cards** (Task 22). Identical card
+   grids and the hero-metric template are banned, and "generic SaaS
+   dashboard" is a named anti-reference.
+
+**Four backend endpoints added, each closing a drift or a gap** — every one
+because the frontend must not own what the backend owns:
+`GET /banks` (parser registry), `GET /categories` (the fifteen),
+`GET /dashboard` (the statutory deadline), `GET /documents/{id}/download`
+(private buckets), `GET /properties/{id}/ownership` (PUT replaces the
+complete set).
+
+**Two tests that could not have worked, both found by mutation:**
+
+- Asserting a rendered status colour equalled its token was tautological —
+  it compared the token to itself, so a green `settled` passed. The claim
+  that matters (only two of five states carry chroma) now lives in
+  `theme_test.dart`, asserted against the palette's neutrals.
+- The ownership editor's float test used 33.33/33.33/33.34, which sums to
+  **exactly** 100.0, so replacing the 2dp comparison with `== 100` passed.
+  Brute force found the real shape: **no two-way split fails at all** — all
+  9,999 are exact — so only a three-way case can catch it.
+  5.00 + 63.01 + 31.99 = 99.99999999999999 does.
+
+**Caught myself mid-build**: the dashboard's first draft had a 2px coloured
+bar down the left of each line — a side-stripe border, an absolute ban —
+with a comment explaining why it was different. It wasn't. Third instance
+today of writing a justification instead of removing the thing.
+
+**Also fixed**: the ownership editor built a `TextEditingController` inside
+`build`, which resets the cursor on every keystroke. Unusable in practice,
+invisible in a screenshot, and caught only by thinking about the lifecycle.
+
+**Environment note**: the local Supabase stack degraded after ~22 hours and
+began timing out auth-admin calls, turning a 10s suite into 242s with
+spurious ERRORs that looked exactly like code failures. `supabase stop &&
+supabase start` fixed it.
+
+**Not done, and worth knowing:** no screen beyond sign-in has been seen in a
+browser. Reaching them needs a real Google sign-in, which is Mahmud's to
+perform. Every screen is covered by widget tests, but the gstatic finding
+earlier today is the reminder that tests and reality are different things.
+
+
 ## Session 2026-08-04 (cont.) — Phase 7 begun, and a privacy claim caught wrong
 
 Design language decided (`PRODUCT.md`, `DESIGN.md`), theme rebuilt to it,
