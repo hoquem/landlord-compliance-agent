@@ -173,6 +173,25 @@ async def _apply_confirm(
     return updated
 
 
+@router.get("/categories")
+async def list_categories(auth: CurrentAuth) -> list[str]:
+    """List the HMRC categories a transaction may be confirmed against.
+
+    Exists so the review screen's picker does not hard-code the fifteen.
+    ``src/core/categories.py`` is the single source of truth -- the SQL enum
+    is already pinned against it by ``tests/db/test_schema.py`` -- and a
+    third copy in Dart would drift into offering a category the API then
+    rejects.
+
+    Ordered as declared rather than alphabetically: the enum's order groups
+    income before expenses, which is the order an accountant reads them in.
+
+    :param auth: the authenticated caller.
+    :returns: every ``HmrcCategory`` value, in declaration order.
+    """
+    return [category.value for category in HmrcCategory]
+
+
 @router.get("/transactions")
 async def list_transactions(
     auth: CurrentAuth,

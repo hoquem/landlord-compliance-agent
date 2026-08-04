@@ -89,7 +89,7 @@ GoRouter buildRouter({
           GoRoute(
             path: '/review',
             builder: (BuildContext context, GoRouterState state) =>
-                const ReviewScreen(),
+                ReviewScreen(api: api),
           ),
           GoRoute(
             path: '/certificates',

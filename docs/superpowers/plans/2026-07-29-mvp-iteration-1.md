@@ -659,7 +659,7 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
 ### Task 21: Review screen (the core UX)
 
 - Files: `frontend/lib/features/review/`
-- [ ] Transaction list for an import: category chip + property + confidence; lines below confidence threshold flagged "needs attention" (amber, subtle pulse once — not looping); tap → edit category/property (bottom sheet, enum-driven); multi-select → confirm batch; confirmed rows animate to settled state. Widget tests: proposal renders, low-confidence flag at <0.8, batch confirm calls API once. Commit.
+- [x] Transaction list for an import: category chip + property + confidence; lines below confidence threshold flagged "needs attention" (amber, subtle pulse once — not looping); tap → edit category/property (bottom sheet, enum-driven); multi-select → confirm batch; confirmed rows animate to settled state. Widget tests: proposal renders, low-confidence flag at <0.8, batch confirm calls API once. Commit.
 
 ### Task 22: Certificates + dashboard
 

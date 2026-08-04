@@ -83,6 +83,58 @@ class HttpApiClient implements ApiClient {
   }
 
   @override
+  Future<List<Txn>> listTransactions({String? importId, String? status}) async {
+    final Map<String, String> query = <String, String>{
+      if (importId != null) 'import_id': importId,
+      if (status != null) 'status': status,
+    };
+    final String suffix = query.isEmpty
+        ? ''
+        : '?${query.entries.map((MapEntry<String, String> e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+    final Object? body = await _get('/transactions$suffix');
+    return <Txn>[
+      for (final Object? row in body! as List<Object?>)
+        Txn.fromJson(row! as Map<String, dynamic>),
+    ];
+  }
+
+  @override
+  Future<List<PropertyRef>> listProperties() async {
+    final Object? body = await _get('/properties');
+    return <PropertyRef>[
+      for (final Object? row in body! as List<Object?>)
+        PropertyRef.fromJson(row! as Map<String, dynamic>),
+    ];
+  }
+
+  @override
+  Future<List<String>> listCategories() async {
+    final Object? body = await _get('/categories');
+    return <String>[for (final Object? row in body! as List<Object?>) row! as String];
+  }
+
+  @override
+  Future<void> confirmBatch(List<ConfirmItem> items) async {
+    final http.Response response = await _client.post(
+      Uri.parse('$baseUrl/transactions/confirm-batch'),
+      headers: <String, String>{..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode(<String, Object?>{
+        'items': <Map<String, dynamic>>[for (final ConfirmItem i in items) i.toJson()],
+      }),
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
+  Future<void> excludeTransaction(String transactionId) async {
+    final http.Response response = await _client.post(
+      Uri.parse('$baseUrl/transactions/$transactionId/exclude'),
+      headers: _headers,
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
   Future<ImportSummary> uploadStatement({
     required String entityId,
     required String sourceBank,

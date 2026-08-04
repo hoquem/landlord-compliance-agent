@@ -107,3 +107,101 @@ class Entity {
   final String name;
   final String taxRegime;
 }
+
+/// One property, as the review screen needs it.
+class PropertyRef {
+  const PropertyRef({required this.id, required this.label});
+
+  factory PropertyRef.fromJson(Map<String, dynamic> json) => PropertyRef(
+    id: json['id'] as String,
+    label: <String?>[
+      json['address_line1'] as String?,
+      json['postcode'] as String?,
+    ].whereType<String>().join(', '),
+  );
+
+  final String id;
+  final String label;
+}
+
+/// One transaction, at whatever stage of review it has reached.
+class Txn {
+  const Txn({
+    required this.id,
+    required this.date,
+    required this.amount,
+    required this.direction,
+    required this.description,
+    required this.status,
+    this.hmrcCategory,
+    this.propertyId,
+    this.confidence,
+  });
+
+  factory Txn.fromJson(Map<String, dynamic> json) => Txn(
+    id: json['id'] as String,
+    date: DateTime.parse(json['date'] as String),
+    amount: double.parse('${json['amount']}'),
+    direction: json['direction'] as String,
+    description: json['description'] as String,
+    status: json['status'] as String,
+    hmrcCategory: json['hmrc_category'] as String?,
+    propertyId: json['property_id'] as String?,
+    confidence: json['confidence'] == null
+        ? null
+        : double.parse('${json['confidence']}'),
+  );
+
+  final String id;
+  final DateTime date;
+
+  /// A **magnitude**, always positive. The sign lives in [direction],
+  /// exactly as the column pair does — see `docs/domain/money.md`. Anything
+  /// that needs a signed number derives it; nothing stores one.
+  final double amount;
+
+  final String direction;
+  final String description;
+  final String status;
+  final String? hmrcCategory;
+  final String? propertyId;
+
+  /// The agent's confidence, 0–1, or null if no agent has seen this line.
+  final double? confidence;
+
+  /// Signed for display only: money out reads negative.
+  ///
+  /// This is the *parser's* convention (direction alone), not the export's
+  /// (which also depends on category). A line being reviewed has no settled
+  /// category yet, so direction is all there is.
+  double get signedForDisplay => direction == 'out' ? -amount : amount;
+
+  WorkState get state => switch (status) {
+    'unclassified' || 'proposed' => WorkState.needsYou,
+    'confirmed' => WorkState.settled,
+    'excluded' => WorkState.setAside,
+    _ => WorkState.working,
+  };
+
+  String get label => switch (status) {
+    'unclassified' => 'Not categorised',
+    'proposed' => 'Proposed',
+    'confirmed' => 'Confirmed',
+    'excluded' => 'Excluded',
+    _ => status,
+  };
+
+  /// Whether a human still has to decide about this line.
+  ///
+  /// `proposed` counts: an agent's suggestion nobody accepted is not a
+  /// decision, and `export_pack.py` refuses to export while one remains.
+  bool get needsDecision => status == 'unclassified' || status == 'proposed';
+}
+
+/// Below this, a proposal is shown as unsettled and sorted to the top.
+///
+/// Confidence changes **what you see first**, never what appears true. It
+/// is deliberately not a colour: a low-confidence proposal is not an error,
+/// it is "look here first", and tinting it would collide with the status
+/// vocabulary and imply the agent erred by being unsure.
+const double kLowConfidence = 0.8;

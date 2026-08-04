@@ -18,6 +18,7 @@ from decimal import Decimal
 
 import pytest
 
+from src.core.categories import HmrcCategory
 from tests.api.conftest import OrgUser, as_user, call, db
 
 
@@ -366,3 +367,31 @@ async def test_confirm_batch_refuses_another_orgs_transaction(make_org_user) -> 
     assert resp.status_code == 404, resp.text
     assert (await txn_row(a_txn))["status"] == "unclassified", "batch is atomic across orgs too"
     assert (await txn_row(b_txn))["status"] == "unclassified"
+
+
+async def test_the_category_list_comes_from_the_enum(org_user: OrgUser) -> None:
+    """The review picker must not hard-code the fifteen categories.
+
+    Compared against ``HmrcCategory`` itself, so there is one definition.
+    The SQL enum is already pinned against the same source by
+    ``tests/db/test_schema.py``, which makes this the third link in one
+    chain rather than a third opinion.
+    """
+    resp = await as_user(org_user, "GET", "/categories")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [c.value for c in HmrcCategory]
+
+
+async def test_the_category_list_is_in_declaration_order(org_user: OrgUser) -> None:
+    """Income first, then expenses -- the order an accountant reads them in."""
+    resp = await as_user(org_user, "GET", "/categories")
+
+    values = resp.json()
+    assert values[0] == "rent_income"
+    assert values.index("rent_income") < values.index("repairs_maintenance")
+
+
+async def test_the_category_list_needs_a_token() -> None:
+    """Behind auth, like every other route."""
+    assert (await call("GET", "/categories")).status_code == 401

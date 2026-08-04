@@ -29,6 +29,28 @@ class ApiException implements Exception {
   String toString() => detail;
 }
 
+/// One line of a batch confirm.
+class ConfirmItem {
+  const ConfirmItem({
+    required this.transactionId,
+    required this.hmrcCategory,
+    this.propertyId,
+  });
+
+  final String transactionId;
+  final String hmrcCategory;
+
+  /// Optional: not every allowable cost belongs to one property.
+  /// `use_of_home_allowance` is the standing example.
+  final String? propertyId;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'transaction_id': transactionId,
+    'hmrc_category': hmrcCategory,
+    'property_id': propertyId,
+  };
+}
+
 abstract class ApiClient {
   /// Every import in the caller's org, oldest first.
   Future<List<ImportSummary>> listImports();
@@ -47,6 +69,30 @@ abstract class ApiClient {
 
   /// The caller's entities, for the upload form.
   Future<List<Entity>> listEntities();
+
+  /// Transactions, optionally narrowed to one import or one status.
+  Future<List<Txn>> listTransactions({String? importId, String? status});
+
+  /// The caller's properties, for attributing a line.
+  Future<List<PropertyRef>> listProperties();
+
+  /// The fifteen HMRC categories, in declaration order.
+  ///
+  /// Fetched for the same reason as [listBanks]: `core/categories.py` is the
+  /// source of truth, the SQL enum is already pinned against it, and a copy
+  /// in Dart would be a third opinion.
+  Future<List<String>> listCategories();
+
+  /// Confirm many transactions at once.
+  ///
+  /// One call, not N. The backend applies the whole batch in a single
+  /// transaction and abandons all of it on any failure, because a partly
+  /// applied batch leaves the user believing they confirmed a screenful
+  /// when some of it silently did not take.
+  Future<void> confirmBatch(List<ConfirmItem> items);
+
+  /// Mark one transaction as outside the property business.
+  Future<void> excludeTransaction(String transactionId);
 
   /// Bank names the parser accepts.
   ///
