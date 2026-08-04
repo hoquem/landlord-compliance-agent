@@ -7,9 +7,10 @@ either is missing -- a deployment without them must not start.
 
 from fastapi import FastAPI
 
-from src.api.routers import portfolio
+from src.api.routers import imports, portfolio
 
 app = FastAPI()
+app.include_router(imports.router)
 app.include_router(portfolio.router)
 
 

@@ -42,51 +42,17 @@ same live stack, orgs and users, so it wants the same fixtures.
 import uuid
 from decimal import Decimal
 
-import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
 
 from scripts.seed_org import seed_org
-from src.api.main import app
 from src.api.routers import portfolio
 from src.core.splits import split_amount
 from src.db import models
-from tests.api.conftest import AuthUser, OrgUser, db, mint_token
+from tests.api.conftest import AuthUser, OrgUser, as_user, call, db
 
 # ---------------------------------------------------------------------------
 # Request helpers.
 # ---------------------------------------------------------------------------
-
-
-async def call(
-    method: str, path: str, *, token: str | None = None, json: object = None
-) -> httpx.Response:
-    """Make one in-process request against the real app.
-
-    :param method: HTTP method.
-    :param path: request path.
-    :param token: bearer credentials to send, or ``None`` to send no
-        ``Authorization`` header at all.
-    :param json: JSON body to send, or ``None`` for no body.
-    :returns: the raw response.
-    """
-    headers = {"Authorization": f"Bearer {token}"} if token is not None else None
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        return await client.request(method, path, headers=headers, json=json)
-
-
-async def as_user(
-    org_user: OrgUser, method: str, path: str, json: object = None
-) -> httpx.Response:
-    """Make one request authenticated as ``org_user``.
-
-    :param org_user: the caller.
-    :param method: HTTP method.
-    :param path: request path.
-    :param json: JSON body to send, or ``None`` for no body.
-    :returns: the raw response.
-    """
-    return await call(method, path, token=mint_token(org_user.user_id), json=json)
 
 
 def entity_body(**overrides: object) -> dict:

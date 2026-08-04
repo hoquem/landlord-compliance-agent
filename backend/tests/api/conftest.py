@@ -364,3 +364,61 @@ async def _dispose_app_engine():
     """
     yield
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Request helpers, shared by every router's test module.
+#
+# These lived in ``test_portfolio.py`` until Task 14 needed them too. Moved
+# here rather than copied: two divergent copies of "how this suite talks to
+# the app" is exactly the drift the shared conftest exists to prevent.
+# ---------------------------------------------------------------------------
+async def call(
+    method: str,
+    path: str,
+    *,
+    token: str | None = None,
+    json: object = None,
+    files: dict | None = None,
+    data: dict | None = None,
+) -> httpx.Response:
+    """Make one in-process request against the real mounted app.
+
+    :param method: HTTP method.
+    :param path: request path.
+    :param token: bearer credentials to send, or ``None`` to send no
+        ``Authorization`` header at all.
+    :param json: JSON body to send, or ``None`` for no body.
+    :param files: multipart file parts, for upload endpoints.
+    :param data: multipart/form fields, alongside ``files``.
+    :returns: the raw response.
+    """
+    from src.api.main import app as real_app
+
+    headers = {"Authorization": f"Bearer {token}"} if token is not None else None
+    async with AsyncClient(transport=ASGITransport(app=real_app), base_url="http://t") as client:
+        return await client.request(method, path, headers=headers, json=json, files=files, data=data)
+
+
+async def as_user(
+    org_user: "OrgUser",
+    method: str,
+    path: str,
+    json: object = None,
+    *,
+    files: dict | None = None,
+    data: dict | None = None,
+) -> httpx.Response:
+    """Make one request authenticated as ``org_user``.
+
+    :param org_user: the caller.
+    :param method: HTTP method.
+    :param path: request path.
+    :param json: JSON body to send, or ``None`` for no body.
+    :param files: multipart file parts.
+    :param data: multipart/form fields.
+    :returns: the raw response.
+    """
+    return await call(
+        method, path, token=mint_token(org_user.user_id), json=json, files=files, data=data
+    )

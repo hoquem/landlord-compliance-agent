@@ -553,7 +553,7 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
 - Create: `backend/src/api/routers/imports.py`
 - Test: `backend/tests/api/test_imports.py`
 
-- [ ] **Step 0 (from Task 6 review — spec §Security "storage buckets namespaced per org"):** creating the statements bucket requires `storage.objects` RLS policies enforcing the `{org_id}/` path prefix (the `documents` table cannot enforce path isolation — `storage_path` is free text). Add policies restricting authenticated access to paths starting with their org id; service connection used by the API bypasses. Test: authenticated user cannot read an object under another org's prefix.
+- [x] **Step 0 (from Task 6 review — spec §Security "storage buckets namespaced per org"):** creating the statements bucket requires `storage.objects` RLS policies enforcing the `{org_id}/` path prefix (the `documents` table cannot enforce path isolation — `storage_path` is free text). Add policies restricting authenticated access to paths starting with their org id; service connection used by the API bypasses. Test: authenticated user cannot read an object under another org's prefix.
 
   **Baseline measured on the live local stack 2026-07-29 (controller prep, ahead of the task):** there are **zero buckets** and **zero `storage.objects` policies**, but RLS **is** already enabled on both `storage.objects` and `storage.buckets`. So storage is currently deny-by-default for authenticated users — a safe starting point — and this step must create both the bucket and its policies. Prefer creating the bucket **in a migration** (reproducible; `supabase start` replays it) over a one-off script.
 
@@ -572,10 +572,19 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
   ```
 
   Both forms were measured against the live database, not reasoned about.
-- [ ] **Step 1:** Failing tests: `POST /imports` (multipart CSV + entity_id) stores file to Supabase Storage (`statements/{org_id}/...`), parses; on success creates `imports` row (status `parsed`) + `transactions` rows (status `unclassified`) + `job_queue` row (`type=categorise`); on `StatementParseError` creates `imports` row status `failed` with row-level error detail in response and DB — and NO transaction rows; `GET /imports` lists with status.
-- [ ] **Step 1b (sign convention — from Task 10 review):** the parser emits SIGNED amounts (negative = money out); the DB stores MAGNITUDE + `direction`. Task 14 MUST store `amount = abs(ParsedLine.amount)` and `direction = 'out' if line.amount < 0 else 'in'`. Failing test: a -84.99 parsed line lands as amount 84.99 / direction 'out'. Manual claims (null import_id, e.g. use_of_home_allowance) get `direction = 'out'`.
-- [ ] **Step 2:** Implement (repository layer in `src/db/`), PASS, commit.
+- [x] **Step 1:** Failing tests: `POST /imports` (multipart CSV + entity_id) stores file to Supabase Storage (`statements/{org_id}/...`), parses; on success creates `imports` row (status `parsed`) + `transactions` rows (status `unclassified`) + `job_queue` row (`type=categorise`); on `StatementParseError` creates `imports` row status `failed` with row-level error detail in response and DB — and NO transaction rows; `GET /imports` lists with status.
+- [x] **Step 1b (sign convention — from Task 10 review):** the parser emits SIGNED amounts (negative = money out); the DB stores MAGNITUDE + `direction`. Task 14 MUST store `amount = abs(ParsedLine.amount)` and `direction = 'out' if line.amount < 0 else 'in'`. Failing test: a -84.99 parsed line lands as amount 84.99 / direction 'out'. Manual claims (null import_id, e.g. use_of_home_allowance) get `direction = 'out'`.
+- [x] **Step 2:** Implement (repository layer in `src/db/`), PASS, commit.
 
+
+**Task 14 outcome (2026-08-04).** 270 tests (was 255), both orderings 154, env-free 115, ruff clean.
+
+- **Storage** is `src/api/storage.py`, one function `upload_statement(org_id, filename, content)`. It takes an org id and a *filename*, never a path, and reduces the filename to a sanitised leaf — so a caller cannot ask for a path and therefore cannot ask for the wrong one. No Supabase SDK: the upload is one authenticated POST and `httpx` was already a dependency; a client can be swapped in behind the function without anything above it changing.
+- **A parse failure is recorded, not rolled back.** 201 with `status='failed'` and the offending row number in `error_detail`; no `transactions`, no `job_queue` row. A *request* problem (unknown `source_bank`, another org's `entity_id`) is still a 4xx, because in that case no file was ever accepted — and the bank is checked **before** upload so a file that could never be read leaves no orphaned object.
+- **DEVIATION from Step 2, deliberate:** the plan said "repository layer in `src/db/`". Queries live in the router instead, matching `portfolio.py`, which Tasks 15–17 also copy. Introducing a second persistence idiom for one endpoint would cost more in inconsistency than it buys; if a repository layer is wanted it should be a deliberate sweep across all routers, not a one-off here.
+- **Five mutations, each killing exactly its target and nothing else:** inverting `direction`, dropping `abs()`, removing the entity org check, removing the `list_imports` org filter (each → one named test), and skipping filename sanitising (→ the two escape cases).
+- Two rules of this repo's own were broken in the first draft and fixed before commit: a broad `except Exception` (narrowed to `ParserError`, since catching everything would report a bug in this module as the user's file being at fault) and reaching into the parser's private `_FORMATS` (now the public `is_registered_bank`).
+- `call`/`as_user` moved from `test_portfolio.py` to `tests/api/conftest.py` rather than copied — two divergent copies of "how this suite talks to the app" is the drift the shared conftest exists to prevent.
 ### Task 15: Review & confirm endpoints
 
 **Files:**

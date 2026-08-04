@@ -486,6 +486,21 @@ _FORMATS: dict[str, StatementFormat] = {
 }
 
 
+def is_registered_bank(bank: str) -> bool:
+    """Whether a format is registered under ``bank``.
+
+    Lets a caller reject an unknown bank *before* doing expensive or
+    irreversible work -- the imports endpoint checks this before storing an
+    uploaded file, so a file that could never have been read does not leave
+    an orphaned object behind. Public so that callers need not reach into
+    ``_FORMATS``.
+
+    :param bank: the bank name to check.
+    :returns: ``True`` if :func:`parse_statement` would accept it.
+    """
+    return bank in _FORMATS
+
+
 def _normalise_header(header: list[str]) -> tuple[str, ...]:
     """Normalise a raw header row for format matching: strip + casefold each cell."""
     return tuple(cell.strip().casefold() for cell in header)
