@@ -24,10 +24,25 @@ unless `--dart-define=UseLocalCanvasKit=true` — while `flutter build web`
 already copies CanvasKit into `build/web/canvaskit/`. The bytes ship and go
 unused.
 
-**Not yet fixed** (the user asked for a review, not a fix). Three files are
-corrected to say what is true; the commit stands per the no-amend rule. The
-fix is one define plus a re-measure, because whether it also removes the
-Roboto fetch is unverified.
+**FIXED, partially, same session** (Mahmud chose "now, before Task 20").
+CanvasKit is self-hosted via a new `web/flutter_bootstrap.js` setting
+`config.canvasKitBaseUrl`. Two of the three external requests are gone;
+`fonts.gstatic.com` for Flutter's Roboto fallback remains, and its lever is
+the bootstrap's `fontFallbackBaseUrl` (which would require vendoring the
+fallback files at Flutter's expected path structure).
+
+**Both dart-defines I first reached for were wrong**, and I only knew because
+I re-measured: neither `UseLocalCanvasKit=true` nor
+`FLUTTER_WEB_CANVASKIT_URL=...` changes anything, because the *runtime*
+bootstrap re-derives the URL from `engineRevision`. Only the runtime config
+key works.
+
+**And a trap that nearly produced a third wrong conclusion:** Flutter
+registers a service worker caching the whole build, so three consecutive
+"the fix didn't work" measurements were the service worker replaying the
+first build. Unregister it and clear `flutter-app-cache` before trusting any
+before/after network measurement. Had I stopped at the first re-measure I
+would have concluded the fix was impossible.
 
 **Where the test goes: Task 23's E2E smoke** — assert the app requests no
 external origins. A widget test cannot see this; that is precisely why four

@@ -247,38 +247,29 @@ screen. Subsetting to Latin would cut most of that. Keep it in proportion
 though: `canvaskit.wasm` is **5.6 MB**, so the font is not where the weight
 conversation lives.
 
-**Measured 2026-08-04, and it corrects the paragraph above.** Bundling Inter
-removes *a* Google request, not *the* Google requests. A real
-`flutter build web` still fetches three things from Google on every load:
-`canvaskit.wasm` and `canvaskit.js` from `www.gstatic.com`, and a Roboto
-`woff2` from `fonts.gstatic.com`. The Flutter tool injects
-`FLUTTER_WEB_CANVASKIT_URL=https://www.gstatic.com/...` unless
-`--dart-define=UseLocalCanvasKit=true` is passed — while already copying
-CanvasKit into `build/web/canvaskit/`, so the bytes ship and go unused. Until
-that define is set and the result re-measured, **this page contacts Google on
-load and the claim above is incomplete.** Tracked as the top item in the
-2026-08-04 critique.
+**Measured 2026-08-04, then fixed, then re-measured.** Bundling Inter removed
+*a* Google request, not *the* Google requests. A built web app was also
+fetching `canvaskit.wasm` (5.6 MB) and `canvaskit.js` from `www.gstatic.com`
+and a Roboto `woff2` from `fonts.gstatic.com` — on a page showing bank
+transactions.
 
+CanvasKit is now served from our own origin via `web/flutter_bootstrap.js`
+(`config.canvasKitBaseUrl`). Neither `--dart-define=UseLocalCanvasKit=true`
+nor `--dart-define=FLUTTER_WEB_CANVASKIT_URL=...` works: the runtime
+bootstrap re-derives the URL from `engineRevision`, so only the runtime
+config key does. Verified in a browser, not from flag documentation.
 
-Scale, fixed (never fluid), ratio ≈1.15–1.25:
+**One external request remains:** `https://fonts.gstatic.com/s/roboto/...`,
+Flutter's default font fallback. The lever is the bootstrap's
+`fontFallbackBaseUrl`, which defaults to `https://fonts.gstatic.com/s/`;
+pointing it at our own origin means vendoring the fallback files at the path
+structure Flutter expects. Not done. **Until it is, the app makes one request
+to Google per load.**
 
-| Role | Size / weight | Use |
-|---|---|---|
-| `display` | 30 / 300 | moments only: queue cleared, export filed |
-| `title-lg` | 21 / 600 | screen titles |
-| `title` | 17 / 600 | section headings, the proposal line |
-| `body` | 15 / 400 | prose, form fields |
-| `label` | 13 / 500 | buttons, nav, column headers |
-| `meta` | 12 / 400 | dates, status words, bank narrative |
-| `numeric` | 15 / 500 | every amount |
-
-**Every number uses `FontFeature.tabularFigures()` and
-`FontFeature.slashedZero()`.** Amounts right-align, digits share a column, a
-zero can never be an O. This is the single highest-value typographic
-decision in the product and it is not optional on any screen.
-
-Prose caps at 70ch. Tables may run wider; the review list is meant to be
-dense.
+A trap worth knowing: Flutter registers a service worker that caches the
+whole build. Three consecutive "the fix didn't work" measurements were the
+service worker serving the first build. Unregister it and clear
+`flutter-app-cache` before believing any before/after network measurement.
 
 ## Elevation
 

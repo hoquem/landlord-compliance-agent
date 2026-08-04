@@ -70,8 +70,9 @@ flutter:
   # Licence: SIL Open Font License 1.1, shipped at assets/fonts/LICENSE.txt.
   #
   # NOTE (measured 2026-08-04): this removes *a* Google request, not all of
-  # them. A built web app still fetches canvaskit from www.gstatic.com and a
-  # Roboto woff2 from fonts.gstatic.com. See DESIGN.md.
+  # them. CanvasKit is now self-hosted via web/flutter_bootstrap.js; one
+  # request to fonts.gstatic.com for Flutter's Roboto fallback remains. See
+  # DESIGN.md.
   fonts:
     - family: Inter
       fonts:

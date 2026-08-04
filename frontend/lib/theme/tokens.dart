@@ -159,10 +159,10 @@ abstract final class AppType {
   /// transactions. This repo already disables CrewAI telemetry for exactly
   /// that reason; a font fetch is the same class of leak.
   ///
-  /// **Necessary, not sufficient — measured 2026-08-04.** A built web app
-  /// still contacts `www.gstatic.com` for CanvasKit and `fonts.gstatic.com`
-  /// for a Roboto fallback. Bundling this font closes one hole in a wall
-  /// that has three. See DESIGN.md.
+  /// **Necessary, not sufficient — measured 2026-08-04.** Bundling this font
+  /// closed one hole in a wall that had three. CanvasKit is now self-hosted
+  /// too (`web/flutter_bootstrap.js`); one request to `fonts.gstatic.com`
+  /// for Flutter's Roboto fallback still remains. See DESIGN.md.
   static const String family = 'Inter';
 
   /// Digits that share a column, and a zero that can never be an O.
