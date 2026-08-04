@@ -356,3 +356,119 @@ def test_row_number_survives_embedded_newline_in_earlier_row(tmp_path: Path) -> 
         parse_statement(p, bank="generic")
     # header=1, first record spans physical lines 2-3, bad row is physical line 4.
     assert exc.value.row_number == 4
+
+
+# ---------------------------------------------------------------------------
+# Barclays -- the last real gap, closed 2026-08-04 from a live export.
+#
+# Structurally the simplest format yet: headered, six columns, one signed
+# amount, dd/mm/yyyy, UTF-8. The two things that are not simple are both in
+# the file's *whitespace*, and both were measured, not anticipated:
+#
+#   * `Memo` is a fixed-width mainframe field. It carries runs of padding
+#     spaces AND embedded tabs, unquoted -- e.g.
+#     `SAMPLE LETTINGS L     \t98A SAMPLE ROAD BGC\t`. The csv module handles
+#     this correctly (tab is not a delimiter), but the narrative that reaches
+#     the categoriser and the review screen would otherwise carry twenty-space
+#     runs and stray tabs.
+#   * Every data row after the first begins with a tab, and the file ends with
+#     a line containing nothing but a tab. The leading tabs land in `Number`,
+#     which is discarded; the trailing line is an export artefact exactly like
+#     a trailing blank line, and is tolerated the same way.
+# ---------------------------------------------------------------------------
+def test_parses_barclays_csv() -> None:
+    lines = parse_statement(FIXTURES / "barclays.csv", bank="barclays")
+    assert len(lines) == 6
+    assert lines[0].date == date(2026, 8, 3)
+    assert lines[0].amount == Decimal("50.96")
+
+
+def test_barclays_amount_is_signed_in_one_column() -> None:
+    """Money in is positive, money out negative -- as exported, not derived.
+
+    Unlike Nationwide there is no Paid out/Paid in pair to collapse, so the
+    only way to get this wrong is to negate it. Pinned because an inversion
+    would flip every total while each row still looked plausible.
+    """
+    lines = parse_statement(FIXTURES / "barclays.csv", bank="barclays")
+    assert [line.amount for line in lines] == [
+        Decimal("50.96"),
+        Decimal("-1134.60"),
+        Decimal("-34.83"),
+        Decimal("950.00"),
+        Decimal("-2000.00"),
+        Decimal("-8.50"),
+    ]
+
+
+def test_barclays_narrative_collapses_padding_and_embedded_tabs() -> None:
+    """The memo's mainframe padding is layout, not information.
+
+    Twenty spaces and a tab inside `SAMPLE LETTINGS L     \\t98A SAMPLE ROAD`
+    say nothing a reader or a categoriser can use, and they would be stored
+    verbatim on every transaction row.
+    """
+    lines = parse_statement(FIXTURES / "barclays.csv", bank="barclays")
+    assert lines[3].description == "Counter Credit SAMPLE LETTINGS L 98A SAMPLE ROAD BGC"
+    assert not any("\t" in line.description for line in lines)
+    assert not any("  " in line.description for line in lines)
+
+
+def test_barclays_subcategory_is_kept_alongside_the_memo() -> None:
+    """`Standing Order` is as much signal as the counterparty is.
+
+    The categoriser distinguishes a mortgage standing order from a one-off
+    transfer partly on this, so dropping it to keep the narrative tidy would
+    remove exactly the discriminator it needs.
+    """
+    lines = parse_statement(FIXTURES / "barclays.csv", bank="barclays")
+    assert lines[1].description.startswith("Standing Order ")
+    assert "MORTGAGE STO" in lines[1].description
+
+
+def test_barclays_leading_tab_on_the_number_column_is_harmless() -> None:
+    """Every row after the first starts with a tab, landing in a discarded column."""
+    lines = parse_statement(FIXTURES / "barclays.csv", bank="barclays")
+    assert lines[2].date == date(2026, 8, 3)
+    assert lines[2].amount == Decimal("-34.83")
+
+
+def test_a_generic_file_uploaded_as_barclays_fails_loudly() -> None:
+    with pytest.raises(StatementFormatMismatchError) as exc:
+        parse_statement(FIXTURES / "generic.csv", bank="barclays")
+    assert "barclays" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Whitespace-only trailing line -- widened from "blank" for Barclays.
+# ---------------------------------------------------------------------------
+def test_trailing_whitespace_only_line_at_eof_is_tolerated(tmp_path: Path) -> None:
+    """A final line of just a tab is an export artefact, like a blank one.
+
+    Barclays' export ends with one. No format has a data row that is blank
+    in every cell, so treating it as data could only ever produce a
+    confusing error about the last line of the file.
+    """
+    p = tmp_path / "trailing_ws.csv"
+    p.write_text("Date,Description,Amount,Balance\n01/07/2026,GOOD ROW,-10.00,900.00\n\t\n")
+    lines = parse_statement(p, bank="generic")
+    assert len(lines) == 1
+
+
+def test_a_whitespace_only_row_mid_file_still_raises(tmp_path: Path) -> None:
+    """The tolerance is for the *last* line only, and stays that way.
+
+    This is the guard on the widening above: whitespace in the middle of a
+    file is missing data, not a trailing artefact, and skipping it would
+    drop a transaction silently.
+    """
+    p = tmp_path / "ws_mid.csv"
+    p.write_text(
+        "Date,Description,Amount,Balance\n"
+        "01/07/2026,GOOD ROW,-10.00,900.00\n"
+        "\t\n"
+        "02/07/2026,AFTER,-5.00,895.00\n"
+    )
+    with pytest.raises(StatementParseError) as exc:
+        parse_statement(p, bank="generic")
+    assert exc.value.row_number == 3

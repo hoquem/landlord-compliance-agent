@@ -332,20 +332,33 @@ def _parse_hsbc_row(row: list[str], row_number: int) -> ParsedLine:
 
 
 def _single_amount_row(
-    *, date_index: int, description_indices: tuple[int, ...], amount_index: int, columns: int
+    *,
+    date_index: int,
+    description_indices: tuple[int, ...],
+    amount_index: int,
+    columns: int,
+    collapse_whitespace: bool = False,
 ) -> Callable[[list[str], int], ParsedLine]:
     """Build a row parser for a headered format with one signed amount column.
 
-    Starling, Monzo and Mettle differ only in which columns carry the date,
-    the narrative and the amount, so they share one parser rather than three
-    near-identical copies. Formats whose shape is genuinely different --
-    Nationwide's two-column money, HSBC's headerless rows -- keep their own.
+    Starling, Monzo, Mettle and Barclays differ only in which columns carry
+    the date, the narrative and the amount, so they share one parser rather
+    than four near-identical copies. Formats whose shape is genuinely
+    different -- Nationwide's two-column money, HSBC's headerless rows --
+    keep their own.
 
     :param date_index: column holding the transaction date.
     :param description_indices: columns to join into the narrative, in
         order; empty cells are skipped.
     :param amount_index: column holding the signed amount.
     :param columns: exact number of cells a valid row must have.
+    :param collapse_whitespace: squeeze every run of whitespace in the
+        narrative -- including embedded tabs -- down to one space. Opt-in
+        rather than always-on: it is only right where the padding is a
+        fixed-width layout artefact carrying no information, which is
+        Barclays' ``Memo`` and no other format measured so far. Applying it
+        everywhere would quietly change narratives whose spacing has never
+        been shown to be meaningless.
     :returns: a ``parse_row`` callable for :class:`StatementFormat`.
     """
 
@@ -363,6 +376,10 @@ def _single_amount_row(
         narrative = " ".join(
             part for part in (row[i].strip() for i in description_indices) if part
         )
+        if collapse_whitespace:
+            # `split()` with no argument splits on any run of whitespace,
+            # so this removes padding runs and embedded tabs in one step.
+            narrative = " ".join(narrative.split())
         return ParsedLine(date=parsed_date, description=narrative, amount=amount)
 
     return parse_row
@@ -452,6 +469,29 @@ METTLE_FORMAT = StatementFormat(
     min_columns=10,
 )
 
+BARCLAYS_FORMAT = StatementFormat(
+    name="barclays",
+    # `Number` (a cheque number, 0 when there isn't one) and `Account` (sort
+    # code + account number, identical on every row of a statement) carry
+    # nothing a transaction needs, so neither reaches the narrative. The
+    # leading tab that begins every row after the first lands in `Number`
+    # and is discarded with it.
+    parse_row=_single_amount_row(
+        date_index=1,
+        # Subcategory first: "Standing Order" is what distinguishes a
+        # mortgage payment from a one-off transfer, and the categoriser
+        # leans on it as much as on the counterparty.
+        description_indices=(4, 5),
+        amount_index=3,
+        columns=6,
+        # `Memo` is a fixed-width mainframe field: runs of padding spaces
+        # and unquoted embedded tabs. Measured from a live export.
+        collapse_whitespace=True,
+    ),
+    header=("number", "date", "account", "amount", "subcategory", "memo"),
+    min_columns=6,
+)
+
 NATIONWIDE_FORMAT = StatementFormat(
     name="nationwide",
     parse_row=_parse_nationwide_row,
@@ -482,6 +522,7 @@ _FORMATS: dict[str, StatementFormat] = {
         STARLING_FORMAT,
         MONZO_FORMAT,
         METTLE_FORMAT,
+        BARCLAYS_FORMAT,
     )
 }
 
@@ -560,8 +601,16 @@ def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
     except UnicodeDecodeError as exc:
         raise StatementDecodeError(bank, fmt.encoding, str(exc)) from exc
 
-    # Tolerate exactly one trailing blank line at EOF; anything else blank is loud.
-    if rows and not rows[-1][1]:
+    # Tolerate exactly one trailing blank line at EOF; anything else blank is
+    # loud. "Blank" means every cell is empty once stripped, not just a row
+    # with no cells: Barclays' export ends with a line containing a single
+    # tab, which is the same artefact wearing different whitespace. No
+    # format has a data row that is empty in every cell, so this can only
+    # ever discard something that was never a transaction -- and only at
+    # EOF, so a gap in the middle of a file still raises. Both halves pinned
+    # by ``test_trailing_whitespace_only_line_at_eof_is_tolerated`` and
+    # ``test_a_whitespace_only_row_mid_file_still_raises``.
+    if rows and not any(cell.strip() for cell in rows[-1][1]):
         rows = rows[:-1]
 
     lines: list[ParsedLine] = []
