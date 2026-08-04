@@ -1,5 +1,21 @@
 # Landlord Compliance Agent — MVP (Iteration 1) Implementation Plan
 
+> **STATUS 2026-08-04: iteration 1 is complete.** Tasks 1–24 are done; 463
+> backend tests, 104 Flutter tests, ruff and `flutter analyze` clean.
+>
+> **Do not read the unticked boxes in Phases 1–6 as outstanding work.** Those
+> phases were executed before the task-level checkboxes became the tracking
+> unit, and their *step*-level boxes were never ticked as the steps were done.
+> They are left as written rather than back-ticked, because ticking forty
+> boxes I did not personally watch pass would be a worse record than an honest
+> gap. What is checkable is that every artefact those steps were to produce
+> exists and is green — `tests/test_health.py`, `0001_core.sql`, `0002_rls.sql`,
+> `core/{categories,parser,splits,quarters}.py`, `db/models.py`,
+> `flows/categorise.py`, `evals/run_eval.py`, `tests/__init__.py`,
+> `tests/api/conftest.py`, `frontend/test/theme_test.dart`, `.env.example` —
+> and that the suites covering them pass. Phases 7–8 are ticked per task with
+> a dated note.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** MTD-ready digital records for Mahmud's portfolio: CSV statement ingest → AI-proposed HMRC categorisation → human review/confirm → cumulative quarterly export pack, plus a static compliance-certificates page.
@@ -686,7 +702,7 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
   - **The grep this line originally specified was wrong, and was not used.** `build/web` carries thirty-odd absolute URLs, nearly all licence text in `NOTICES`, plus `www.gstatic.com` in `flutter.js` as the branch `canvasKitBaseUrl` short-circuits — a grep reports failure on a clean build. The real check is `performance.getEntriesByType('resource')` filtered against `location.origin`, which is what the bootstrap comment already said. Recorded as a manual procedure in `README.md`; there is deliberately no `make check-origins`.
   - **Fix:** `fontFallbackBaseUrl: "fallback-fonts/"` plus the SDK's own `Roboto-Regular.ttf` vendored at `web/fallback-fonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2` — the exact path the engine appends. **Nothing was downloaded**; the file came from `bin/cache/artifacts/material_fonts/`. It is a TrueType font under a `.woff2` name because the name must match and Skia sniffs the container — proved by calling `CanvasKit.Typeface.MakeFreeTypeFaceFromData` on the served bytes and getting non-zero glyph ids, not assumed. "The page still looks right" could not have shown this: every glyph on screen comes from bundled Inter.
   - Guarded against regeneration by `frontend/test/bootstrap_test.dart` (3 tests, both mutations killed exactly one each). That guards the *mechanism*; only a browser can confirm the *outcome*.
-- [ ] **REQUIRED SUB-SKILL** at finish: superpowers:verification-before-completion — full `uv run pytest`, `flutter test`, `ruff check`, show outputs.
+- [x] **REQUIRED SUB-SKILL** at finish: superpowers:verification-before-completion — full `uv run pytest`, `flutter test`, `ruff check`, show outputs. **DONE 2026-08-04:** `463 passed` (backend, both directory orderings), `+104: All tests passed!` (Flutter), `All checks passed!` (ruff), `No issues found!` (`flutter analyze`). The origin measurement was re-run against a build made from the **committed** `flutter_bootstrap.js`, not the one it was developed on: `{total: 15, external: [], serviceWorkersAtMeasureTime: 0}`.
 
 ---
 

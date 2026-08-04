@@ -236,6 +236,11 @@ Iteration 1 (MVP) is complete: parser, categorisation flow, job worker, the
 seven API surfaces, and every Flutter screen. See the plan for what each task
 covered and `docs/planning/progress.md` for the decisions behind them.
 
+One caveat on reading the plan: Phases 1–6 have unticked *step* boxes. They
+are not outstanding work — those phases predate task-level tracking and their
+steps were never back-ticked. The plan's header says which artefacts to check
+instead.
+
 Known limits, all deliberate: the golden set is synthetic; there is no CI; the
 app runs against the local Supabase stack only (a cloud project exists but is
 parked); and no screen beyond sign-in has been exercised against a real Google
