@@ -19,6 +19,7 @@ from src.core.quarters import (
     next_update_deadline,
     quarter_for,
 )
+from src.core.splits import InvalidOwnershipError
 
 # Deterministic, fixed UUIDs.
 ENTITY_A = UUID("00000000-0000-0000-0000-0000000000a1")
@@ -338,3 +339,18 @@ def test_cumulative_totals_entity_not_an_owner_gets_nothing_from_that_property()
     ownerships = {PROPERTY_2: {ENTITY_B: Decimal("100.00")}}
     result = cumulative_totals(txns, ENTITY_A, 2026, 1, ownerships=ownerships)
     assert HmrcCategory.RENT_INCOME not in result
+
+
+def test_cumulative_totals_names_the_property_whose_ownership_is_short() -> None:
+    """A bad share set must say *which* property, not just that one is bad.
+
+    The message reaches the user through the export endpoint's 422. Across
+    a twelve-property portfolio, "shares sum to 50" without a property id
+    tells them a return cannot be filed and nothing about how to fix it.
+    """
+    txns = [_txn(date(2026, 4, 10), "100.00", HmrcCategory.RENT_INCOME)]
+
+    with pytest.raises(InvalidOwnershipError, match=str(PROPERTY_1)):
+        cumulative_totals(
+            txns, ENTITY_A, 2026, 1, ownerships={PROPERTY_1: {ENTITY_A: Decimal("50.00")}}
+        )

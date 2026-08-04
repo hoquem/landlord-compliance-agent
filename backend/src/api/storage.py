@@ -1,18 +1,25 @@
-"""Supabase Storage upload for statement files.
+"""Supabase Storage uploads for statement and export files.
 
-One function, :func:`upload_statement`, hiding the whole transport: bucket
-name, REST shape, service-role credentials, and -- most importantly -- the
-construction of the object path.
+Two public functions -- :func:`upload_statement` and :func:`upload_export`
+-- hiding the whole transport: bucket name, REST shape, service-role
+credentials, and -- most importantly -- the construction of the object path.
 
 **The path is a security boundary, which is why building it is not the
-caller's job.** Objects live at ``statements/{org_id}/...`` and the policies
-in ``supabase/migrations/0003_storage.sql`` key on that first segment. Those
-policies protect the direct-from-Flutter path only: the API connects as the
-``postgres`` superuser (see ``DATABASE_URL``) and bypasses RLS entirely, so
-on this path the prefix is exactly as trustworthy as the code below. Hence
-the interface takes ``org_id`` and a *filename*, never a path, and reduces
-the filename to a bare leaf name before using it. A caller cannot ask for a
-path, so a caller cannot ask for the wrong one.
+caller's job.** Objects live at ``{bucket}/{org_id}/...`` and the policies
+in ``supabase/migrations/0003_storage.sql`` and ``0004_exports_bucket.sql``
+key on that first segment. Those policies protect the direct-from-Flutter
+path only: the API connects as the ``postgres`` superuser (see
+``DATABASE_URL``) and bypasses RLS entirely, so on this path the prefix is
+exactly as trustworthy as the code below. Hence the interface takes
+``org_id`` and a *filename*, never a path, and reduces the filename to a
+bare leaf name before using it. A caller cannot ask for a path, so a caller
+cannot ask for the wrong one.
+
+Statements and exports use separate buckets. The predicate is text-compared
+so one bucket would work, but a generated return stored under a path saying
+``statements/`` is a lie the next reader trips on -- and the two have
+different lifecycles: a statement is input the user supplied, an export is
+output this system produced and may regenerate.
 
 No Supabase SDK: the upload is one authenticated POST, and ``httpx`` is
 already a dependency. If signed URLs or resumable uploads are wanted later,
@@ -33,6 +40,10 @@ import httpx
 #: The bucket created by ``0003_storage.sql``. Private: a public bucket
 #: serves objects to anyone holding the URL, bypassing every policy.
 BUCKET = "statements"
+
+#: The bucket created by ``0004_exports_bucket.sql``, private for the same
+#: reason -- a filed return is as sensitive as the statements behind it.
+EXPORTS_BUCKET = "exports"
 
 #: Everything not in this set is replaced in a client-supplied filename.
 #: Deliberately an allowlist -- a denylist of "dangerous" characters is a
@@ -88,29 +99,32 @@ def statement_object_path(org_id: uuid.UUID, filename: str) -> str:
     return f"{org_id}/{uuid.uuid4()}/{safe_leaf_name(filename)}"
 
 
-async def upload_statement(org_id: uuid.UUID, filename: str, content: bytes) -> str:
-    """Store one statement file under the org's prefix and return its path.
+async def _upload(bucket: str, path: str, content: bytes, content_type: str) -> str:
+    """PUT one object into a bucket as the service role, or fail loudly.
 
-    :param org_id: the owning org, from the authenticated caller. Never from
-        client input -- it is the whole tenant boundary for stored objects.
-    :param filename: the client-supplied filename; sanitised to a leaf.
-    :param content: the raw file bytes.
+    The single place the transport lives. Both public upload functions build
+    a path and then come here, so there is one answer to "what does an
+    upload do when storage says no".
+
+    :param bucket: the destination bucket.
+    :param path: the object path, already built from a trusted org prefix.
+    :param content: the raw bytes.
+    :param content_type: MIME type to store the object as.
     :raises StorageUploadError: if Supabase Storage returns a non-2xx, or
         the request cannot be made at all.
-    :returns: the object path the file was stored at, for ``imports.file_path``.
+    :returns: ``path``, so callers can record it.
     """
     base_url = os.environ["SUPABASE_URL"]
     service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    path = statement_object_path(org_id, filename)
 
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{base_url}/storage/v1/object/{BUCKET}/{path}",
+                f"{base_url}/storage/v1/object/{bucket}/{path}",
                 headers={
                     "apikey": service_key,
                     "Authorization": f"Bearer {service_key}",
-                    "Content-Type": "text/csv",
+                    "Content-Type": content_type,
                 },
                 content=content,
             )
@@ -122,3 +136,40 @@ async def upload_statement(org_id: uuid.UUID, filename: str, content: bytes) -> 
             f"storage refused {path!r}: {resp.status_code} {resp.text[:200]}"
         )
     return path
+
+
+async def upload_statement(org_id: uuid.UUID, filename: str, content: bytes) -> str:
+    """Store one statement file under the org's prefix and return its path.
+
+    :param org_id: the owning org, from the authenticated caller. Never from
+        client input -- it is the whole tenant boundary for stored objects.
+    :param filename: the client-supplied filename; sanitised to a leaf.
+    :param content: the raw file bytes.
+    :raises StorageUploadError: if the upload fails; see :func:`_upload`.
+    :returns: the object path the file was stored at, for ``imports.file_path``.
+    """
+    return await _upload(
+        BUCKET, statement_object_path(org_id, filename), content, "text/csv"
+    )
+
+
+async def upload_export(
+    org_id: uuid.UUID, filename: str, content: bytes, content_type: str
+) -> str:
+    """Store one generated export file under the org's prefix.
+
+    Unlike :func:`upload_statement` the filename is ours, not a client's --
+    but it goes through the same sanitising path builder anyway. An export
+    filename is assembled from an entity name and a period, and an entity
+    name *is* client input.
+
+    :param org_id: the owning org, from the authenticated caller.
+    :param filename: the generated filename; sanitised to a leaf.
+    :param content: the raw file bytes.
+    :param content_type: ``text/csv`` or ``application/pdf``.
+    :raises StorageUploadError: if the upload fails; see :func:`_upload`.
+    :returns: the object path, for ``documents.storage_path``.
+    """
+    return await _upload(
+        EXPORTS_BUCKET, statement_object_path(org_id, filename), content, content_type
+    )

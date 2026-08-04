@@ -20,7 +20,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from src.core.categories import EXCLUDED_FROM_EXPORT, HmrcCategory
-from src.core.splits import split_amount
+from src.core.splits import InvalidOwnershipError, split_amount
 
 # EXCLUDED_FROM_EXPORT (categories.py) is the source of truth for "never on
 # an HMRC export": personal_non_business and capital_expense. Only
@@ -254,7 +254,18 @@ def cumulative_totals(
             shares = ownerships[txn.property_id]
             if entity_id not in shares:
                 continue
-            contribution = split_amount(txn.amount, shares)[entity_id]
+            try:
+                contribution = split_amount(txn.amount, shares)[entity_id]
+            except InvalidOwnershipError as exc:
+                # `split_amount` only sees a share map, so it cannot say
+                # whose it is. This is the innermost place that knows, and
+                # the message surfaces to a user through the export
+                # endpoint's 422 -- across a twelve-property portfolio,
+                # "shares sum to 50" without a property id says a return
+                # cannot be filed and nothing about how to fix it.
+                raise InvalidOwnershipError(
+                    f"property {txn.property_id}: {exc}", exc.shares
+                ) from exc
 
         totals[txn.hmrc_category] = (
             totals.get(txn.hmrc_category, Decimal("0.00")) + contribution
