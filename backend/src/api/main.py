@@ -7,11 +7,12 @@ either is missing -- a deployment without them must not start.
 
 from fastapi import FastAPI
 
-from src.api.routers import imports, portfolio
+from src.api.routers import imports, portfolio, transactions
 
 app = FastAPI()
 app.include_router(imports.router)
 app.include_router(portfolio.router)
+app.include_router(transactions.router)
 
 
 @app.get("/health")

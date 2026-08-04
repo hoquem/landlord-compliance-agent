@@ -66,11 +66,12 @@ from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import delete, null, select
+from sqlalchemy import delete, select
 
+from src.api.audit import audit as _audit
 from src.api.auth import CurrentAuth
 from src.api.scoping import get_owned_or_404, not_found
-from src.db.models import AuditLog, Entity, Property, PropertyOwnership
+from src.db.models import Entity, Property, PropertyOwnership
 from src.db.session import async_session_factory
 
 router = APIRouter(tags=["portfolio"])
@@ -370,33 +371,6 @@ def _unprocessable(detail: str) -> HTTPException:
     :returns: a 422 :class:`~fastapi.HTTPException`.
     """
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
-
-
-def _audit(
-    auth: CurrentAuth, action: str, *, before: object | None, after: object | None
-) -> AuditLog:
-    """Build the ``audit_log`` row for one state change by the caller.
-
-    :param auth: the caller, recorded as ``actor_type='user'`` plus their
-        ``actor_id``.
-    :param action: the action name, e.g. ``entity.updated``.
-    :param before: JSON-safe prior state, or ``None`` for a creation.
-    :param after: JSON-safe new state.
-    :returns: an unpersisted :class:`~src.db.models.AuditLog`, to be added
-        to the same transaction as the change it describes.
-    """
-    return AuditLog(
-        org_id=auth.org_id,
-        actor_type="user",
-        actor_id=auth.user_id,
-        action=action,
-        # `null()` rather than `None`: SQLAlchemy's JSONB type maps a Python
-        # `None` to the JSON value `null`, which is a *present* value in a
-        # jsonb column. "There was no prior state" is a SQL NULL -- the
-        # difference is visible to anything querying `before is null`.
-        before=null() if before is None else before,
-        after=null() if after is None else after,
-    )
 
 
 def _share_payloads(rows: list[PropertyOwnership]) -> list[dict[str, str]]:

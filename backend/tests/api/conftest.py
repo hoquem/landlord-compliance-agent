@@ -381,6 +381,7 @@ async def call(
     json: object = None,
     files: dict | None = None,
     data: dict | None = None,
+    params: dict | None = None,
 ) -> httpx.Response:
     """Make one in-process request against the real mounted app.
 
@@ -391,13 +392,16 @@ async def call(
     :param json: JSON body to send, or ``None`` for no body.
     :param files: multipart file parts, for upload endpoints.
     :param data: multipart/form fields, alongside ``files``.
+    :param params: query-string parameters.
     :returns: the raw response.
     """
     from src.api.main import app as real_app
 
     headers = {"Authorization": f"Bearer {token}"} if token is not None else None
     async with AsyncClient(transport=ASGITransport(app=real_app), base_url="http://t") as client:
-        return await client.request(method, path, headers=headers, json=json, files=files, data=data)
+        return await client.request(
+            method, path, headers=headers, json=json, files=files, data=data, params=params
+        )
 
 
 async def as_user(
@@ -408,6 +412,7 @@ async def as_user(
     *,
     files: dict | None = None,
     data: dict | None = None,
+    params: dict | None = None,
 ) -> httpx.Response:
     """Make one request authenticated as ``org_user``.
 
@@ -417,8 +422,15 @@ async def as_user(
     :param json: JSON body to send, or ``None`` for no body.
     :param files: multipart file parts.
     :param data: multipart/form fields.
+    :param params: query-string parameters.
     :returns: the raw response.
     """
     return await call(
-        method, path, token=mint_token(org_user.user_id), json=json, files=files, data=data
+        method,
+        path,
+        token=mint_token(org_user.user_id),
+        json=json,
+        files=files,
+        data=data,
+        params=params,
     )

@@ -591,9 +591,19 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
 - Create: `backend/src/api/routers/transactions.py`
 - Test: `backend/tests/api/test_transactions.py`
 
-- [ ] **Step 1:** Failing tests: `GET /transactions?import_id=&status=` returns lines with proposal fields; `POST /transactions/{id}/confirm` body `{hmrc_category, property_id}` — sets status `confirmed`, writes `audit_log` row (actor=user, before/after JSON); confirming with a property whose ownership doesn't sum to 100 → 422 with explanation; `POST /transactions/{id}/exclude` for personal lines (writes an `audit_log` row, same as confirm); bulk `POST /transactions/confirm-batch` (all-or-nothing transaction).
-- [ ] **Step 2:** Implement, PASS, commit.
+- [x] **Step 1:** Failing tests: `GET /transactions?import_id=&status=` returns lines with proposal fields; `POST /transactions/{id}/confirm` body `{hmrc_category, property_id}` — sets status `confirmed`, writes `audit_log` row (actor=user, before/after JSON); confirming with a property whose ownership doesn't sum to 100 → 422 with explanation; `POST /transactions/{id}/exclude` for personal lines (writes an `audit_log` row, same as confirm); bulk `POST /transactions/confirm-batch` (all-or-nothing transaction).
+- [x] **Step 2:** Implement, PASS, commit.
 
+
+**Task 15 outcome (2026-08-04).** 286 tests (was 270), both orderings 170, env-free 115, ruff clean.
+
+- **The ownership guard runs the real apportionment**, `split_amount(txn.amount, shares)`, rather than re-checking "sums to 100" by hand. So "can this be confirmed?" and "can this be exported?" are the same question by construction and cannot drift. It is reachable in practice precisely because `0001_core.sql:228-234` deliberately leaves the sum rule out of the database: a 50%-only ownership set is insertable, and the test writes one directly to prove the guard is not theoretical.
+- **Single and batch confirm share `_apply_confirm`.** The failure mode otherwise is a user who hits the guard confirming one line, then confirms the same lines in bulk and slips past a weaker batch path.
+- **Batch is all-or-nothing** — one session, one commit at the end. Mutating it to commit per item fails the atomicity tests.
+- `_audit` moved from `portfolio.py` to **`src/api/audit.py`** and is now shared. Copying it, as Step 6's note suggested, would have produced two definitions of what an audit row looks like; Step 4a already exists because a rule about auditing was restated once and read as exhaustive. Task 17 imports it too.
+- `call`/`as_user` in `tests/api/conftest.py` gained `params` support for `?status=`.
+- **Four mutations, each killing its target:** skipping the ownership guard (3 tests), committing per batch item (2), ignoring the transaction org filter (1), dropping the exclude audit row (1).
+- **Naming note:** the query parameter is `?status=` but the handler argument is `status_filter`, because `status` shadows the imported `fastapi.status` module inside that scope. The alias is what the review screen sends, so the alias is the part that had to be right.
 ### Task 16: Quarterly export endpoint
 
 **Files:**
