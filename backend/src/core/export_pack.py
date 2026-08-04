@@ -348,3 +348,110 @@ def build_export_pack(
         category_csv=category_csv,
         property_csv=property_csv,
     )
+
+
+#: Categories that never reach an export, so never get a ``mtd_quarters``
+#: column. ``personal_non_business`` is dropped by
+#: :func:`~src.core.quarters.cumulative_totals` by definition -- it is never
+#: reported to HMRC.
+DROPPED_FROM_EXPORT = frozenset({HmrcCategory.PERSONAL_NON_BUSINESS})
+
+#: ``HmrcCategory`` to its ``mtd_quarters`` column. A category added to the
+#: enum without a matching column would silently vanish from every export --
+#: the worst kind of failure, because the numbers still look plausible -- so
+#: ``test_column_map_covers_every_reportable_category`` pins the set.
+CATEGORY_COLUMNS: dict[HmrcCategory, str] = {
+    category: f"{category.value}_total"
+    for category in HmrcCategory
+    if category not in DROPPED_FROM_EXPORT
+}
+
+
+class CumulativeDecreaseError(Exception):
+    """Raised when an already-filed quarter no longer recomputes to what was filed.
+
+    Not "a total went down" -- that is lawful, and blocking it would refuse a
+    correct return whenever a refund lands. This means the *basis* moved:
+    transactions behind a filed quarter were edited or deleted afterwards, so
+    what HMRC holds and what the data now says have diverged.
+
+    Deliberately has no override flag. Reconciling a filed period against
+    changed history is a decision about a tax return, and a boolean that let
+    someone past it would be used exactly when it should not be.
+
+    :ivar quarter: the earlier quarter whose basis moved.
+    :ivar category: the category that differs.
+    :ivar stored: the total as filed.
+    :ivar recomputed: the total from today's data.
+    """
+
+    def __init__(
+        self, quarter: int, category: HmrcCategory, stored: Decimal, recomputed: Decimal
+    ) -> None:
+        self.quarter = quarter
+        self.category = category
+        self.stored = stored
+        self.recomputed = recomputed
+        super().__init__(
+            f"{quarter_label(quarter)} {category.value} was exported as {stored:.2f} "
+            f"but now recomputes to {recomputed:.2f}. Transactions behind a filed "
+            f"quarter have changed; reconcile them before exporting again."
+        )
+
+
+def assert_history_intact(
+    *,
+    entity_id: uuid.UUID,
+    tax_year: int,
+    quarter: int,
+    transactions: Sequence[TxnRow],
+    ownerships: Mapping[uuid.UUID, Mapping[uuid.UUID, Decimal]],
+    stored_by_quarter: Mapping[int, Mapping[HmrcCategory, Decimal]],
+) -> None:
+    """Check every earlier filed quarter still recomputes to what was filed.
+
+    The spec asked that cumulative totals never decrease. Task 10's review
+    found that self-contradictory: a lawful in-window refund makes a
+    cumulative total fall. So the question asked here is not "did it fall?"
+    but "is the history still what we filed?" -- if it is, a decrease is a
+    refund and fine; if it is not, transactions behind a filed quarter were
+    changed, which no automatic rule should resolve.
+
+    Only quarters **earlier** than ``quarter`` are compared. Re-exporting the
+    same quarter with different figures is ordinary -- a missed transaction
+    added, then re-filed -- and produces a new version row.
+
+    :param entity_id: the entity being exported.
+    :param tax_year: calendar year the tax year starts in.
+    :param quarter: the quarter about to be exported.
+    :param transactions: today's rows, as passed to :func:`build_export_pack`.
+    :param ownerships: ``property_id -> {entity_id: percentage}``.
+    :param stored_by_quarter: quarter number to the totals filed for it --
+        the latest version's figures. Quarters absent from this mapping were
+        never exported and are not compared.
+    :raises CumulativeDecreaseError: naming the first quarter, category,
+        filed total and recomputed total that disagree.
+    """
+    confirmed = [
+        TxnForTotals(
+            date=txn.date,
+            amount=signed_amount(txn.amount, txn.direction, txn.hmrc_category),
+            hmrc_category=txn.hmrc_category,
+            entity_id=txn.entity_id,
+            property_id=txn.property_id,
+        )
+        for txn in transactions
+        if txn.status == "confirmed" and txn.hmrc_category is not None
+    ]
+
+    for earlier in sorted(q for q in stored_by_quarter if q < quarter):
+        recomputed = cumulative_totals(confirmed, entity_id, tax_year, earlier, ownerships)
+        stored = stored_by_quarter[earlier]
+        # Compare over the union: a category present in one and absent from
+        # the other is exactly the discrepancy being looked for, and absent
+        # means zero rather than "skip".
+        for category in sorted(set(stored) | set(recomputed)):
+            was = stored.get(category, Decimal("0.00"))
+            now = recomputed.get(category, Decimal("0.00"))
+            if was != now:
+                raise CumulativeDecreaseError(earlier, category, was, now)

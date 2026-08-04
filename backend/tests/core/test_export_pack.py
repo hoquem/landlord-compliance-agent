@@ -22,12 +22,16 @@ import pytest
 
 from src.core.categories import HmrcCategory
 from src.core.export_pack import (
+    CATEGORY_COLUMNS,
+    DROPPED_FROM_EXPORT,
+    CumulativeDecreaseError,
     ExportBlockedError,
     ExportEntity,
     SimplePnlPack,
     TxnRow,
     build_export_pack,
     quarter_label,
+    assert_history_intact,
     quarter_number,
     signed_amount,
 )
@@ -257,3 +261,139 @@ def test_quarter_label_rejects_out_of_range(bad: int) -> None:
 def test_quarter_number_rejects_an_unknown_label() -> None:
     with pytest.raises(ValueError, match="quarter"):
         quarter_number("Q5")
+
+
+# ---------------------------------------------------------------------------
+# The cumulative-decrease guard.
+#
+# The spec originally said cumulative totals must never decrease. Task 10's
+# review found that self-contradictory: a lawful in-window refund -- a
+# contractor repaying part of a Q1 repair in Q2 -- makes a cumulative total
+# fall, and blocking it would refuse a correct return.
+#
+# The discriminator is therefore not "did it fall?" but "is the history still
+# what we exported?". Recompute each earlier quarter from today's confirmed
+# data and compare against what was stored at the time. Intact history means
+# any decrease is a real refund; changed history means transactions were
+# edited or deleted after being filed, which is a human problem and not
+# something an override flag should paper over.
+# ---------------------------------------------------------------------------
+def test_column_map_covers_every_reportable_category() -> None:
+    """``mtd_quarters`` has a column per category except the dropped one.
+
+    A category added to the enum without a column here would silently vanish
+    from every export -- the worst kind of failure, because the numbers still
+    look plausible.
+    """
+    assert set(CATEGORY_COLUMNS) == set(HmrcCategory) - DROPPED_FROM_EXPORT
+    assert all(col.endswith("_total") for col in CATEGORY_COLUMNS.values())
+
+
+def test_a_refund_decrease_with_intact_history_is_allowed() -> None:
+    """Q2 total below Q1 is lawful when Q1 still recomputes to what was filed."""
+    q1_txns = [row(category=HmrcCategory.REPAIRS_MAINTENANCE, direction="out", amount="500.00")]
+    stored = {1: {HmrcCategory.REPAIRS_MAINTENANCE: Decimal("500.00")}}
+
+    # The Q2 refund reduces the cumulative repairs figure to 300.
+    all_txns = [
+        *q1_txns,
+        row(
+            category=HmrcCategory.REPAIRS_MAINTENANCE,
+            direction="in",
+            amount="200.00",
+            when=date(2026, 8, 1),
+        ),
+    ]
+    assert_history_intact(
+        entity_id=ENTITY,
+        tax_year=2026,
+        quarter=2,
+        transactions=all_txns,
+        ownerships=OWNERSHIPS,
+        stored_by_quarter=stored,
+    )
+
+
+def test_history_changed_after_export_raises_and_names_the_difference() -> None:
+    """A Q1 transaction deleted after filing must not pass silently.
+
+    This is the case the guard exists for: the cumulative figure still looks
+    internally consistent, and only comparing against what was *filed*
+    reveals that the basis moved.
+    """
+    stored = {1: {HmrcCategory.REPAIRS_MAINTENANCE: Decimal("500.00")}}
+    # The Q1 repair is gone from today's data -- deleted after it was filed.
+    with pytest.raises(CumulativeDecreaseError) as exc:
+        assert_history_intact(
+            entity_id=ENTITY,
+            tax_year=2026,
+            quarter=2,
+            transactions=[],
+            ownerships=OWNERSHIPS,
+            stored_by_quarter=stored,
+        )
+    message = str(exc.value)
+    assert "Q1" in message, "name the quarter whose basis moved"
+    assert "repairs_maintenance" in message, "name the category"
+    assert "500.00" in message, "name what was filed"
+    assert "0.00" in message, "and what it recomputes to now"
+    assert exc.value.quarter == 1
+    assert exc.value.category is HmrcCategory.REPAIRS_MAINTENANCE
+
+
+def test_re_exporting_a_quarter_with_higher_totals_is_allowed() -> None:
+    """Adding a missed transaction and re-filing is normal, not an anomaly.
+
+    The guard only compares *earlier* quarters, so re-exporting the same
+    quarter with a larger figure is untouched by it -- that becomes a new
+    version row.
+    """
+    stored = {1: {HmrcCategory.RENT_INCOME: Decimal("1200.00")}}
+    assert_history_intact(
+        entity_id=ENTITY,
+        tax_year=2026,
+        quarter=1,
+        transactions=[row(amount="1800.00")],
+        ownerships=OWNERSHIPS,
+        stored_by_quarter=stored,
+    )
+
+
+def test_a_quarter_never_exported_is_not_compared() -> None:
+    """Nothing was filed, so there is no basis to have moved."""
+    assert_history_intact(
+        entity_id=ENTITY,
+        tax_year=2026,
+        quarter=3,
+        transactions=[row()],
+        ownerships=OWNERSHIPS,
+        stored_by_quarter={},
+    )
+
+
+def test_a_transaction_added_to_a_filed_quarter_also_raises() -> None:
+    """Divergence is divergence, in either direction.
+
+    This test exists because mutation testing found the suite could not tell
+    ``was != now`` from the naive ``now < was``: every other case here moves
+    a filed total *down*, so both rules behaved identically and the central
+    decision of Step 2b was unpinned.
+
+    Adding a missed transaction to an already-filed quarter is just as much a
+    divergence from what HMRC holds as deleting one. It is not a smaller
+    problem for being in the taxpayer's disfavour, and the resolution is the
+    same human reconciliation.
+    """
+    stored = {1: {HmrcCategory.RENT_INCOME: Decimal("1200.00")}}
+    with pytest.raises(CumulativeDecreaseError) as exc:
+        assert_history_intact(
+            entity_id=ENTITY,
+            tax_year=2026,
+            quarter=2,
+            # Q1 now holds more rent than was filed for it.
+            transactions=[row(amount="1200.00"), row(amount="300.00", when=date(2026, 5, 2))],
+            ownerships=OWNERSHIPS,
+            stored_by_quarter=stored,
+        )
+    assert exc.value.stored == Decimal("1200.00")
+    assert exc.value.recomputed == Decimal("1500.00")
