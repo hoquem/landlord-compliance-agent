@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from src.core.categories import EXCLUDED_FROM_EXPORT, INCOME_CATEGORIES, HmrcCategory
+from src.core.categories import INCOME_CATEGORIES, HmrcCategory
 from src.core.quarters import TxnForTotals, cumulative_totals
 from src.core.splits import split_amount
 
@@ -299,7 +299,7 @@ def build_export_pack(
     # Imported here rather than at module scope: `_quarter_end_date` is
     # private to quarters.py, and reaching for it at import time would make
     # this module's dependency on that privacy invisible at the call site.
-    from src.core.quarters import _quarter_end_date  # noqa: PLC0415
+    from src.core.quarters import _quarter_end_date
 
     window = (datetime.date(tax_year, 4, 6), _quarter_end_date(tax_year, quarter))
 
