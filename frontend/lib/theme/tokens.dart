@@ -160,9 +160,11 @@ abstract final class AppType {
   /// that reason; a font fetch is the same class of leak.
   ///
   /// **Necessary, not sufficient — measured 2026-08-04.** Bundling this font
-  /// closed one hole in a wall that had three. CanvasKit is now self-hosted
-  /// too (`web/flutter_bootstrap.js`); one request to `fonts.gstatic.com`
-  /// for Flutter's Roboto fallback still remains. See DESIGN.md.
+  /// closed one hole in a wall that had three. CanvasKit and Flutter's Roboto
+  /// fallback are now self-hosted too, both via `web/flutter_bootstrap.js`.
+  /// The built app makes **zero** external requests, re-measured in a browser
+  /// after the change; pinned against regeneration of that file by
+  /// `test/bootstrap_test.dart`. See DESIGN.md for the measurement.
   static const String family = 'Inter';
 
   /// Digits that share a column, and a zero that can never be an O.

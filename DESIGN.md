@@ -259,12 +259,29 @@ nor `--dart-define=FLUTTER_WEB_CANVASKIT_URL=...` works: the runtime
 bootstrap re-derives the URL from `engineRevision`, so only the runtime
 config key does. Verified in a browser, not from flag documentation.
 
-**One external request remains:** `https://fonts.gstatic.com/s/roboto/...`,
-Flutter's default font fallback. The lever is the bootstrap's
-`fontFallbackBaseUrl`, which defaults to `https://fonts.gstatic.com/s/`;
-pointing it at our own origin means vendoring the fallback files at the path
-structure Flutter expects. Not done. **Until it is, the app makes one request
-to Google per load.**
+The Roboto fallback is now self-hosted too, via the same bootstrap's
+`fontFallbackBaseUrl`. Flutter's engine downloads a Roboto face eagerly even
+though nothing on screen uses one, so the file is vendored at the exact path
+the engine appends — `fallback-fonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2`,
+which is the SDK's own `Roboto-Regular.ttf` under a `.woff2` name. Skia sniffs
+the container, so the extension is cosmetic; that was proved with
+`CanvasKit.Typeface.MakeFreeTypeFaceFromData`, not assumed.
+
+**The app now makes zero external requests.** Measured 2026-08-04 on a real
+`flutter build web` served over HTTP: 15 resources, all same-origin,
+`external: []`.
+
+```js
+const here = location.origin;
+performance.getEntriesByType('resource').map(e => e.name)
+  .filter(n => !n.startsWith(here) && !n.startsWith('data:') && !n.startsWith('blob:'));
+```
+
+**Grepping the build output is not this check** and must not be substituted
+for it. `build/web` contains thirty-odd absolute URLs, nearly all licence
+text in `NOTICES`, plus `www.gstatic.com` sitting in `flutter.js` as the
+branch our config short-circuits. A grep says "fail" on a clean build. Only
+a browser can tell a string in a bundle from a request on the wire.
 
 A trap worth knowing: Flutter registers a service worker that caches the
 whole build. Three consecutive "the fix didn't work" measurements were the
