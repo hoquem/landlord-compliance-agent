@@ -64,8 +64,9 @@ flutter:
   # from Google's CDN on first paint, which is an outbound request carrying
   # the user's IP on a page showing their bank transactions -- the same class
   # of leak this repo disables CrewAI telemetry to avoid. Four static weights
-  # (300/400/500/600), which is the whole scale in DESIGN.md; ~1.6 MB
-  # uncompressed, and subsetting to Latin is a known, untaken optimisation.
+  # (300/400/500/600), which is the whole scale in DESIGN.md; measured at
+  # 782 KB gzipped in a real web build, and subsetting to Latin is a known,
+  # untaken optimisation.
   # Licence: SIL Open Font License 1.1, shipped at assets/fonts/LICENSE.txt.
   fonts:
     - family: Inter

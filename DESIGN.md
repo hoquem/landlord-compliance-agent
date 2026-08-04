@@ -241,6 +241,11 @@ carrying the user's IP on a page displaying their bank transactions. This
 project already disables CrewAI telemetry for exactly that reason; fetching
 a font is the same class of leak with a friendlier name.
 
+It is not free: four static weights measure **782 KB gzipped** in a real
+`flutter build web`. Subsetting to Latin would cut most of that and is a
+known, untaken optimisation — recorded here rather than left as a surprise
+for whoever profiles the first load.
+
 Scale, fixed (never fluid), ratio ≈1.15–1.25:
 
 | Role | Size / weight | Use |

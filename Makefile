@@ -14,7 +14,7 @@
 # adds no dependency.
 
 .DEFAULT_GOAL := help
-.PHONY: help dev stack down api worker web test lint reset
+.PHONY: help dev stack down api worker web web-test web-lint test lint reset
 
 help:  ## List available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -32,8 +32,27 @@ api:  ## Run the API on :8000 with reload
 worker:  ## Run the job-queue worker
 	cd backend && uv run --env-file ../.env python -m src.worker.main
 
-web:  ## Run the Flutter app in Chrome
-	cd frontend && flutter run -d chrome
+# SUPABASE_URL / SUPABASE_ANON_KEY reach Flutter as --dart-define values,
+# read from .env so there is one source. main.dart throws if either is
+# missing rather than running half-configured.
+#
+# --web-port 3000 is not cosmetic: supabase/config.toml allowlists
+# http://localhost:3000 and http://127.0.0.1:3000 as OAuth redirect targets,
+# and Google refuses any other origin. On a random port, sign-in fails with
+# a provider error that says nothing about ports.
+FLUTTER_DEFINES = \
+	--web-port 3000 \
+	--dart-define=SUPABASE_URL=$(shell grep '^SUPABASE_URL=' .env | cut -d= -f2-) \
+	--dart-define=SUPABASE_ANON_KEY=$(shell grep '^SUPABASE_ANON_KEY=' .env | cut -d= -f2-)
+
+web:  ## Run the Flutter app in Chrome on :3000
+	cd frontend && flutter run -d chrome $(FLUTTER_DEFINES)
+
+web-test:  ## Run the Flutter widget tests
+	cd frontend && flutter test
+
+web-lint:  ## Analyze the Flutter package
+	cd frontend && flutter analyze
 
 test:  ## Run the backend suite (needs the stack up)
 	cd backend && uv run --env-file ../.env pytest
@@ -58,5 +77,5 @@ dev: stack  ## Stack + API + worker + Flutter, all together; Ctrl-C stops all
 	@trap 'kill 0' EXIT INT TERM; \
 	( cd backend && uv run --env-file ../.env uvicorn src.api.main:app --reload --port 8000 ) & \
 	( cd backend && uv run --env-file ../.env python -m src.worker.main ) & \
-	( cd frontend && flutter run -d chrome ) & \
+	( cd frontend && flutter run -d chrome $(FLUTTER_DEFINES) ) & \
 	wait
