@@ -14,11 +14,11 @@
 # adds no dependency.
 
 .DEFAULT_GOAL := help
-.PHONY: help dev stack down api worker web web-test web-lint test lint reset
+.PHONY: help dev stack down api worker web web-build web-test web-lint test lint reset
 
 help:  ## List available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-8s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
 stack:  ## Start the local Supabase stack (idempotent)
 	supabase start
@@ -40,14 +40,26 @@ worker:  ## Run the job-queue worker
 # http://localhost:3000 and http://127.0.0.1:3000 as OAuth redirect targets,
 # and Google refuses any other origin. On a random port, sign-in fails with
 # a provider error that says nothing about ports.
-FLUTTER_DEFINES = \
-	--web-port 3000 \
+DART_DEFINES = \
 	--dart-define=SUPABASE_URL=$(shell grep '^SUPABASE_URL=' .env | cut -d= -f2-) \
 	--dart-define=SUPABASE_ANON_KEY=$(shell grep '^SUPABASE_ANON_KEY=' .env | cut -d= -f2-) \
 	--dart-define=API_BASE_URL=http://127.0.0.1:8000
 
+# `--web-port` is a `run` flag only; `build` rejects it. Hence the split.
+FLUTTER_DEFINES = --web-port 3000 $(DART_DEFINES)
+
 web:  ## Run the Flutter app in Chrome on :3000
 	cd frontend && flutter run -d chrome $(FLUTTER_DEFINES)
+
+# There is deliberately no `make check-origins`. Whether the app contacts an
+# external host is only answerable in a browser -- see README.md, "Verifying
+# the app makes no external requests". Grepping build/web instead would fail
+# on a clean build: it carries thirty-odd absolute URLs, nearly all licence
+# text in NOTICES, plus www.gstatic.com in flutter.js as the branch
+# canvasKitBaseUrl short-circuits. frontend/test/bootstrap_test.dart guards
+# the mechanism; the browser is what confirms the outcome.
+web-build:  ## Build the production web bundle into frontend/build/web
+	cd frontend && flutter build web $(DART_DEFINES)
 
 web-test:  ## Run the Flutter widget tests
 	cd frontend && flutter test

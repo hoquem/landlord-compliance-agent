@@ -1,5 +1,100 @@
 # Progress Log
 
+## Session 2026-08-04 (cont.) — Task 24 COMPLETE, and the P0 is closed
+
+**Iteration 1 is done.** 463 backend tests, 104 Flutter tests, ruff and
+`flutter analyze` clean.
+
+### The privacy P0 is closed: `external: []`
+
+The app made one request to `https://fonts.gstatic.com/s/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2`
+per load — Flutter's default font fallback, fetched eagerly even though every
+glyph on screen comes from bundled Inter. Fixed with
+`fontFallbackBaseUrl: "fallback-fonts/"` in `web/flutter_bootstrap.js` plus
+the file vendored at exactly the path the engine appends.
+
+**Nothing was downloaded.** The font is the Flutter SDK's own
+`bin/cache/artifacts/material_fonts/Roboto-Regular.ttf`, copied in with its
+licence. It is a TrueType font wearing a `.woff2` name, because the name has
+to match what the engine appends and nothing inspects the extension.
+
+**That last claim was proved, not assumed.** "The page still looks right"
+could not have shown it — Inter covers everything on screen, so a rejected
+fallback would look identical. The discriminating check was to ask Skia
+directly, in the running page:
+
+```js
+const buf = await (await fetch('fallback-fonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2')).arrayBuffer();
+const face = window.flutterCanvasKit.Typeface.MakeFreeTypeFaceFromData(buf);
+// accepted: true, glyphIDs for "Aa1£—": [37, 69, 21, 101, 386]
+```
+
+Non-zero glyph ids for all five codepoints: a working typeface, not a stub.
+Before/after in the browser, service worker unregistered and `flutter-app-cache`
+cleared first: 15 resources, `external: []`.
+
+Costs 171 KB uncompressed against Google's ~15 KB subsetted woff2. Accepted —
+one same-origin request against 5.6 MB of CanvasKit, versus telling Google who
+is reading their bank statements.
+
+### The check this task originally specified was wrong
+
+The plan said: grep `frontend/build/web` for `gstatic.com` / `googleapis.com`.
+**That check fails on a clean build.** The output carries thirty-odd absolute
+URLs, nearly all licence text in `NOTICES`, plus `www.gstatic.com` sitting in
+`flutter.js` as the branch `canvasKitBaseUrl` short-circuits. A check that
+cries wolf gets deleted, so there is deliberately **no `make check-origins`**.
+
+The honest check needs a browser —
+`performance.getEntriesByType('resource')` filtered against `location.origin`,
+which is what `flutter_bootstrap.js`'s own comment already said. It is written
+into `README.md` as a manual procedure, with the service-worker trap attached.
+
+`frontend/test/bootstrap_test.dart` (3 tests) guards the *mechanism*: both
+config keys present, and the vendored font present with TrueType magic bytes
+— the magic-byte check catches a placeholder or truncated copy that an
+existence check would pass. Two mutations run, each killing exactly one test
+and nothing else: deleting the `fontFallbackBaseUrl` line, and moving the font
+file aside.
+
+**Three files were asserting the old state** and are corrected:
+`DESIGN.md`, `frontend/pubspec.yaml`, `frontend/lib/theme/tokens.dart`. That
+is the same shape as the original P0 — a claim copied into four places without
+being measured — so leaving them would have recreated it in reverse.
+
+### README
+
+New, and the front door rather than a fifth copy of the rules: setup, the four
+traps, an architecture sketch, testing, adding a bank format, running the
+golden eval, and the origin procedure. It points at `ENGINEERING.md` and the
+spec instead of restating them.
+
+Two things re-measured rather than copied forward:
+
+- The env-free subset is **173** tests, not the "~100" the plan carried from
+  Task 13. Verified under `env -u DATABASE_URL -u SUPABASE_JWT_SECRET`.
+- The eval's CLI flags were taken from `--help`, not from its docstring.
+
+**Spec open question 1 cross-checked and left alone.** It carries the
+per-entity aggregation answer, the cumulative-YTD confirmation, the sourcing
+caveat and the two enum gaps. Nothing to change; editing for the sake of
+ticking a box would have been worse than not.
+
+`make web-build` added (a `build` target rejects `--web-port`, so the defines
+are split into `DART_DEFINES` and `FLUTTER_DEFINES`).
+
+### Still true, and worth carrying forward
+
+- **`.env` still has no `CATEGORISER_MODEL`.** `.env.example` documents it and
+  the flow fails loudly without it; the suites set it themselves. Flagged
+  since 2026-08-02 and still not silently patched — it is Mahmud's file.
+- The golden set is 20 synthetic lines. Replace wholesale once real confirmed
+  categorisations exist.
+- No CI. The README says what shape it has to take and why a bare `pytest`
+  runs zero tests.
+- **No screen beyond sign-in has been seen in a browser** — reaching them
+  needs a real Google sign-in, which only Mahmud can perform.
+
 ## Session 2026-08-04 (cont.) — Task 23 COMPLETE (E2E smoke)
 
 One test, `backend/tests/e2e/test_smoke.py`, walks a CSV from upload to a
