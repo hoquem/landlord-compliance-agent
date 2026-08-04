@@ -291,9 +291,9 @@ def build_export_pack(
         property referenced.
     :raises ExportBlockedError: if any row inside the window is still
         ``unclassified`` or ``proposed``.
-    :raises KeyError: if a property-allocated row's property is missing
-        from ``ownerships`` -- treating it as wholly owned would misstate
-        tax figures, so it is loud.
+    :raises MissingOwnershipError: if a property-allocated row's property
+        is missing from ``ownerships`` -- treating it as wholly owned would
+        misstate tax figures, so it is loud.
     :returns: a :class:`QuarterlyPack` or :class:`SimplePnlPack`.
     """
     # Imported here rather than at module scope: `_quarter_end_date` is

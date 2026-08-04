@@ -60,6 +60,44 @@ already in the bucket.
 failed commit leaves orphaned objects in the bucket. `imports.py` has the
 same characteristic. No reaper exists.
 
+**Review round (advisor), four findings, all acted on:**
+
+- **`except KeyError` was too wide.** It wrapped both `build_export_pack`
+  and `assert_history_intact`, so any future dict-lookup bug anywhere in
+  the core call tree would have become a confident 422 naming a "property"
+  that might be any key at all — the exact pattern `imports.py` has a
+  comment forbidding. The branch was also **written and never run**: no
+  test covered a property with zero ownership rows. Both fixed:
+  `MissingOwnershipError(KeyError)` raised at the lookup site, caught
+  narrowly, and pinned at core and API level. Mutation: delete the raise so
+  a plain `KeyError` escapes, and both new tests die.
+- **The router docstring over-claimed coverage.** It said "every query
+  filters `org_id` — see the isolation section", but only
+  `_load_transactions`' filter is provable. The filters in
+  `_load_ownerships` and `_load_filed_quarters` **cannot be killed by
+  mutation** — ids are globally unique and 0002's composite FKs already
+  guarantee the org matches — so they are belt-and-braces and the docstring
+  now says so. House rule: name the test or say you did not check.
+- **`export_status` had a dangling promise.** `0001_core.sql` deferred the
+  closed set to Task 16, which is now ticked. Answer recorded in the SQL:
+  the set is one value (`'generated'`), because a row records what *was*
+  filed rather than tracking a submission through states — a re-export
+  inserts a new version instead of moving an old row along. The states it
+  was reserved for belong to the HMRC submission API, which iteration 1
+  does not call. Left as `text`; an enum of one is a guess about the second.
+- **The response was built after the session closed**, working only because
+  `expire_on_commit=False`. `imports.py` and `transactions.py` both
+  materialise before commit; exports now matches.
+
+**Process failure worth recording — the same one, again.** `cd backend &&
+cp src/core/quarters.py /tmp/q.bak` ran from inside `backend/`, so the `cd`
+failed, the `&&` short-circuited, and **no backup was taken** — but the
+heredoc that followed mutated the file anyway. Identical in shape to the
+three verification-masking incidents earlier in this session: a command
+whose result cannot gate what follows it. Repaired by re-applying the two
+lines by hand and diffing against HEAD. The habit to build: run the
+setup/verification step as its own command and read it, never chained.
+
 
 ## Session 2026-07-29 (scoping continued)
 - Design v2 approved by Mahmud (Flutter stack, validated data model, lean MVP)

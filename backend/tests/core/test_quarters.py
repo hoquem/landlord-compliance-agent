@@ -13,6 +13,7 @@ import pytest
 
 from src.core.categories import EXCLUDED_FROM_EXPORT, HmrcCategory
 from src.core.quarters import (
+    MissingOwnershipError,
     TxnForTotals,
     cumulative_totals,
     format_tax_year,
@@ -354,3 +355,20 @@ def test_cumulative_totals_names_the_property_whose_ownership_is_short() -> None
         cumulative_totals(
             txns, ENTITY_A, 2026, 1, ownerships={PROPERTY_1: {ENTITY_A: Decimal("50.00")}}
         )
+
+
+def test_cumulative_totals_names_the_property_missing_from_the_ownership_map() -> None:
+    """A missing property is a distinguishable error, not a bare ``KeyError``.
+
+    Callers turn this into a user-facing message, and a bare ``KeyError``
+    forces them to catch every dict miss in the whole call tree -- which
+    would dress a future typo in this module up as the user's data problem.
+    Subclasses ``KeyError`` so existing callers keep working.
+    """
+    txns = [_txn(date(2026, 4, 10), "100.00", HmrcCategory.RENT_INCOME)]
+
+    with pytest.raises(MissingOwnershipError) as exc:
+        cumulative_totals(txns, ENTITY_A, 2026, 1, ownerships={})
+
+    assert exc.value.property_id == PROPERTY_1
+    assert str(PROPERTY_1) in str(exc.value)

@@ -678,3 +678,26 @@ async def test_another_orgs_transactions_never_reach_the_totals(make_org_user) -
     assert resp.status_code == 201, resp.text
     filed = await rows("mtd_quarters", alice.org_id)
     assert filed[0]["rent_income_total"] == Decimal("1000.00")
+
+
+async def test_a_property_with_no_ownership_at_all_is_refused(org_user: OrgUser) -> None:
+    """422 naming the property, not a 500 and not a silent 100% assumption.
+
+    A property is created before its ownership is set, so a transaction can
+    be confirmed against one and the ownership rows deleted afterwards.
+    Treating the missing map as sole ownership would misstate a tax figure,
+    so the core raises and this is where that becomes an answer.
+    """
+    entity_id = await make_entity(org_user)
+    property_id = await make_property_owned_by(org_user, entity_id)
+    await seed_transaction(org_user, entity_id=entity_id, property_id=property_id)
+    async with db() as conn:
+        await conn.execute(
+            "delete from property_ownership where property_id = $1", uuid.UUID(property_id)
+        )
+
+    resp = await export(org_user, entity_id)
+
+    assert resp.status_code == 422, resp.text
+    assert property_id in resp.text
+    assert await rows("mtd_quarters", org_user.org_id) == []

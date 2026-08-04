@@ -6,8 +6,18 @@
 ``0004_exports_bucket.sql`` are inert here; the filters and the
 server-built storage prefix are the entire tenant boundary. The failure a
 missed filter produces on *this* endpoint is not a leak of ids but an
-overstated tax return, which looks entirely plausible. See
-``tests/api/test_exports.py``'s isolation section.
+overstated tax return, which looks entirely plausible.
+
+Only one of those filters is *pinned*:
+``test_another_orgs_transactions_never_reach_the_totals`` dies if
+:func:`_load_transactions` drops its ``org_id`` (proved by mutation), and
+that is the one that could move money. The filters in
+:func:`_load_ownerships` and :func:`_load_filed_quarters` cannot be killed
+by mutation and are **not** covered -- ``entity_id`` and ``property_id``
+are globally unique, and ``0002_rls.sql``'s composite foreign keys already
+guarantee a ``property_ownership`` row's org matches its property's. They
+are belt-and-braces, kept so that every query in this module reads the
+same way, not because a test would notice their removal.
 
 Four things here are not ordinary CRUD.
 
@@ -71,7 +81,7 @@ from src.core.export_pack import (
     totals_from_columns,
     totals_to_columns,
 )
-from src.core.quarters import format_tax_year
+from src.core.quarters import MissingOwnershipError, format_tax_year
 from src.core.splits import InvalidOwnershipError
 from src.db.models import Document, Entity, MtdQuarter, PropertyOwnership, Transaction
 from src.db.session import async_session_factory
@@ -327,12 +337,15 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
             raise _unprocessable(
                 f"Cannot export: {exc}. Fix the property's ownership shares first."
             ) from exc
-        except KeyError as exc:
+        except MissingOwnershipError as exc:
             # A property-allocated transaction whose property has no
-            # ownership rows at all. Treating it as wholly owned would
-            # misstate a tax figure, so the core raises rather than guess.
+            # ownership rows at all. Deliberately not a bare ``KeyError``:
+            # that would catch every dict miss in the core call tree and
+            # answer 422 as though a future bug in `quarters.py` were the
+            # user's data problem -- the same reason `imports.py` catches
+            # `ParserError` rather than `Exception`.
             raise _unprocessable(
-                f"Cannot export: property {exc.args[0]} has no ownership shares. "
+                f"Cannot export: {exc.property_id} has no ownership shares. "
                 "Set them before exporting."
             ) from exc
 
@@ -401,6 +414,20 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
             )
         )
 
+        # Built before the commit, while the session is certainly open.
+        # `imports.py` and `transactions.py` both materialise their response
+        # model here for the same reason: reading ORM attributes afterwards
+        # works only because `expire_on_commit=False`, and this router
+        # should not be the one that breaks if that ever flips.
+        result = ExportRead(
+            entity_id=entity.id,
+            tax_year=tax_year_label,
+            quarter=quarter,
+            version=version,
+            mtd_quarter_id=filed_row.id if filed_row is not None else None,
+            documents=refs,
+        )
+
         try:
             await session.commit()
         except IntegrityError as exc:
@@ -416,11 +443,4 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
                 ),
             ) from exc
 
-    return ExportRead(
-        entity_id=entity.id,
-        tax_year=tax_year_label,
-        quarter=quarter,
-        version=version,
-        mtd_quarter_id=filed_row.id if filed_row is not None else None,
-        documents=refs,
-    )
+    return result

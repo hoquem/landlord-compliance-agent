@@ -452,9 +452,18 @@ create table public.mtd_quarters (
   replacement_domestic_items_total numeric(12, 2) not null default 0,
   use_of_home_allowance_total numeric(12, 2) not null default 0,
   capital_expense_total numeric(12, 2) not null default 0,
-  -- Free-form until Task 16 pins the export lifecycle; deliberately not an
-  -- enum yet -- the one status column in this file where the closed set
-  -- isn't known.
+  -- Free-form, deliberately not an enum -- the one status column in this
+  -- file where the closed set isn't known.
+  --
+  -- ANSWERED 2026-08-04 (Task 16): the set turned out to be a single value.
+  -- `src/api/routers/exports.py` writes 'generated' and nothing in the MVP
+  -- ever transitions it, because a row here records what *was* filed rather
+  -- than tracking a submission through states -- a re-export inserts a new
+  -- version instead of moving an old row along. The states this column was
+  -- reserved for ('submitted', 'accepted', 'rejected') belong to the HMRC
+  -- submission API, which iteration 1 does not talk to. Left as text until
+  -- something actually needs a second value; an enum of one is a guess
+  -- about what the second will be.
   export_status text,
   generated_document_id uuid references public.documents (id),
   generated_at timestamptz not null default now(),

@@ -51,6 +51,27 @@ _QUARTER_STARTS = (
 _DEADLINE_MONTH_DAYS = ((2, 7), (5, 7), (8, 7), (11, 7))
 
 
+class MissingOwnershipError(KeyError):
+    """Raised when a property-allocated transaction's property is unknown.
+
+    Silently treating it as wholly owned would misattribute a tax figure,
+    so the lookup is loud. It is a distinguishable class rather than a bare
+    ``KeyError`` because callers turn it into a user-facing message: a
+    handler catching plain ``KeyError`` around this call tree would dress a
+    future dict-lookup bug in *this* module up as the user's data problem.
+    Subclasses ``KeyError`` so callers written before it existed still work.
+
+    :ivar property_id: the property with no entry in the ownership map.
+    """
+
+    def __init__(self, property_id: UUID) -> None:
+        self.property_id = property_id
+        super().__init__(
+            f"property {property_id} has no ownership shares; it cannot be "
+            "attributed, and assuming sole ownership would misstate a tax figure"
+        )
+
+
 def quarter_for(d: date) -> tuple[int, int]:
     """Return the UK MTD tax-year quarter containing ``d``.
 
@@ -225,13 +246,14 @@ def cumulative_totals(
     :param ownerships: ``property_id -> {entity_id: percentage}`` for every
         property referenced by ``transactions``. A property-allocated
         transaction whose ``property_id`` is missing from this mapping
-        raises :class:`KeyError` -- silently treating it as 100% owned
-        would misattribute tax figures.
+        raises :class:`MissingOwnershipError` -- silently treating it as
+        100% owned would misattribute tax figures.
     :returns: mapping of :class:`HmrcCategory` to the entity's penny-exact
         YTD total for that category. Categories with no attributable
         transaction in the window are simply absent (not zero-valued).
-    :raises KeyError: if a transaction's ``property_id`` has no entry in
-        ``ownerships``.
+    :raises MissingOwnershipError: if a transaction's ``property_id`` has
+        no entry in ``ownerships``. A ``KeyError`` subclass, so a caller
+        written against the older bare ``KeyError`` still catches it.
     :raises ValueError: see :func:`_validate_start_year`.
     """
     _validate_start_year(tax_year)
@@ -251,6 +273,8 @@ def cumulative_totals(
                 continue
             contribution = txn.amount
         else:
+            if txn.property_id not in ownerships:
+                raise MissingOwnershipError(txn.property_id)
             shares = ownerships[txn.property_id]
             if entity_id not in shares:
                 continue
