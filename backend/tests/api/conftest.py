@@ -434,3 +434,48 @@ async def as_user(
         data=data,
         params=params,
     )
+
+
+def assert_not_nullable_matches_schema(body: type, model: type) -> None:
+    """Assert a PATCH body's ``_NOT_NULLABLE`` is exactly what the schema says.
+
+    Lives here rather than in one router's test module because every
+    ``_PatchBody`` subclass needs it and two divergent copies of an
+    authority check are worse than none -- the second copy is the one that
+    stops being updated.
+
+    The set in the router is hand-maintained, and the per-field tests only
+    pin names that are *already in* it -- they cannot notice a name that was
+    never added, or one misspelled in both the router and the test list at
+    once. That second case is the nasty one: a typo'd name is a silent no-op
+    in the router (nothing checks that a name in the set is even a field),
+    while the matching typo in the test list makes the test pass for the
+    wrong reason, because ``extra="forbid"`` turns the unknown key into a
+    422 that still contains the field name. Green suite, live 500.
+
+    One equality closes all three holes, because ``expected`` is built from
+    the body's own fields:
+
+    * a NOT NULL column missing from the set -- it is in ``expected``;
+    * a nullable column wrongly in the set -- it is not in ``expected``;
+    * a name that is not a field at all -- it cannot be in ``expected``.
+
+    **Keyed on ``__mapper__.columns``, not ``__table__.columns``.** The
+    mapper keys on the *attribute* name, which is what a body field
+    corresponds to; the table keys on the *column* name. They differ
+    wherever a model renames a column --
+    ``ComplianceCertificate.certificate_type`` maps the column ``type`` --
+    and the table form raises ``KeyError`` there. Every body this check ran
+    against before Task 17 happened to have no renamed columns, so that
+    path was never exercised.
+
+    Model-vs-database drift is a different question, already guarded by
+    ``tests/db/test_models_roundtrip.py`` and ``tests/db/test_schema.py``;
+    this check's chain is schema -> models -> body.
+
+    :param body: the ``_PatchBody`` subclass to check.
+    :param model: the mapped model whose columns are the authority.
+    """
+    columns = model.__mapper__.columns
+    expected = {name for name in body.model_fields if not columns[name].nullable}
+    assert body._NOT_NULLABLE == expected

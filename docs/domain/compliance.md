@@ -12,7 +12,8 @@ different things by it — see *Context map*.
 | Term | Definition | Is NOT | Synonyms in use | Related |
 |---|---|---|---|---|
 | **Property** *(compliance face)* | A **dwelling** with a physical address, an energy rating, a licensing status and a set of certificates that expire. | An apportionment key — that is `money.md`'s property. Here nobody cares who owns what share. | "unit", "dwelling" | Compliance certificate, EPC |
-| **Compliance certificate** | A dated document proving one legal requirement is met. Type is one of exactly three: `gas_safety`, `eicr`, `epc`. | A warranty, insurance, or an inspection report. The enum is closed. | "cert" | Expiry date |
+| **Compliance certificate** | A dated document proving one legal requirement is met. Type is one of exactly five: `gas_safety`, `eicr`, `epc`, `hmo_licence`, `selective_licence`. | A warranty, insurance, or an inspection report. The enum is closed. | "cert" | Expiry date, Certificate status |
+| **Certificate status** | `expired`, `expiring` or `valid`, derived from the expiry date against today's UK date. **Never stored.** | A property-level "compliant" boolean — see *Terms deliberately excluded*. | — | Expiry date |
 | **Expiry date** | When a certificate stops being valid. **Required** — a certificate without one cannot express the only question worth asking of it. | The issue date + a fixed term. Terms differ by type and change in law. | — | Compliance certificate |
 | **Issue date** | When the certificate was granted. Optional — often unknown for inherited paperwork. | The expiry date. | — | Compliance certificate |
 | **EPC rating** | The energy efficiency band (`A`–`G`) on a property's current EPC. | The EPC certificate itself. The rating is denormalised onto the property for fast filtering; the certificate row is the record. | "energy rating" | EPC expiry |
@@ -43,6 +44,18 @@ different things by it — see *Context map*.
   into 500s.
 - **A certificate's expiry date is required.** `NOT NULL` in
   `supabase/migrations/0001_core.sql`.
+- **The certificate type list said three until 2026-08-04.** The schema and
+  the spec both said five; this file was the one that was wrong, and nothing
+  caught it because until Task 17 no code read the set. Now
+  `src/core/certificates.py`'s `CertificateType` is the Python source of
+  truth and `test_certificate_type_enum_matches_the_python_enum` compares it
+  against the live SQL enum, so the two can no longer drift silently.
+- **Certificate status is derived on every read.** `expired` if the expiry
+  date is past, `expiring` within 60 days, otherwise `valid`. A certificate
+  expiring *today* is `expiring`, not `expired` — it is good for the rest of
+  the day, and saying otherwise puts a landlord in breach a day early.
+  Pinned by `tests/core/test_certificates.py::test_status_boundaries`. The
+  60 days is a UX warning threshold; no statute keys on it.
 
 ## Aggregates
 

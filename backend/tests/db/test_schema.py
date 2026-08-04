@@ -17,6 +17,7 @@ Run locally (from ``backend/``), with the Supabase local stack running
 import asyncpg
 import pytest
 
+from src.core.certificates import CertificateType
 from tests.db.conftest import EXPECTED_TABLES, _database_url
 
 #: The exact 15 HMRC categories from the spec, in spec order. This is the
@@ -255,3 +256,61 @@ async def test_deleting_import_cascades_to_its_transactions() -> None:
         pass
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_compliance_certificates_type_column_uses_the_enum_type() -> None:
+    """``compliance_certificates.type`` must actually be typed ``certificate_type``.
+
+    Same reason as the ``hmrc_category`` guard above: inspecting the
+    standalone enum type would still pass if the column were retyped to
+    plain ``text``, which is the drift that lets an unknown certificate
+    type reach the database.
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        udt_name = await conn.fetchval(
+            """
+            select udt_name
+            from information_schema.columns
+            where table_schema = 'public'
+              and table_name = 'compliance_certificates'
+              and column_name = 'type'
+            """
+        )
+    finally:
+        await conn.close()
+
+    assert udt_name == "certificate_type", (
+        f"compliance_certificates.type is not typed as the certificate_type enum "
+        f"(found udt_name={udt_name!r})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_certificate_type_enum_matches_the_python_enum() -> None:
+    """The SQL ``certificate_type`` enum and :class:`CertificateType` agree.
+
+    Compared against the Python enum itself rather than a second hand-typed
+    list, so there is exactly one place to change a certificate type and no
+    way to change it in one place only.
+
+    ``docs/domain/compliance.md`` claimed three values until 2026-08-04
+    while the schema and the spec both had five -- a drift nothing caught,
+    because until Task 17 no code read the set at all.
+    """
+    conn = await asyncpg.connect(_database_url())
+    try:
+        rows = await conn.fetch(
+            """
+            select e.enumlabel
+            from pg_enum e
+            join pg_type t on e.enumtypid = t.oid
+            where t.typname = 'certificate_type'
+            order by e.enumsortorder
+            """
+        )
+    finally:
+        await conn.close()
+
+    assert [row["enumlabel"] for row in rows] == [t.value for t in CertificateType]

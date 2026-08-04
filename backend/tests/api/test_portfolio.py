@@ -48,7 +48,14 @@ from scripts.seed_org import seed_org
 from src.api.routers import portfolio
 from src.core.splits import split_amount
 from src.db import models
-from tests.api.conftest import AuthUser, OrgUser, as_user, call, db
+from tests.api.conftest import (
+    AuthUser,
+    OrgUser,
+    as_user,
+    assert_not_nullable_matches_schema,
+    call,
+    db,
+)
 
 # ---------------------------------------------------------------------------
 # Request helpers.
@@ -660,41 +667,25 @@ async def test_clearing_an_entity_field_writes_an_audit_row_showing_the_null(
 
 
 @pytest.mark.parametrize(
-    ("body", "table"),
+    ("body", "model"),
     [
-        (portfolio.EntityUpdate, models.Entity.__table__),
-        (portfolio.PropertyUpdate, models.Property.__table__),
+        (portfolio.EntityUpdate, models.Entity),
+        (portfolio.PropertyUpdate, models.Property),
     ],
     ids=["entity", "property"],
 )
 async def test_not_nullable_is_exactly_what_the_schema_says(
-    body: type[portfolio._PatchBody], table: object
+    body: type[portfolio._PatchBody], model: type
 ) -> None:
     """``_NOT_NULLABLE`` is derived-checked against the mapped columns.
 
-    The lists in the router and in ``NOT_NULL_*_FIELDS`` above are both
-    hand-maintained, and the per-field tests only pin the names that are
-    *already in* the set -- they cannot notice a name that was never added,
-    or one misspelled in both places at once. That second case is the nasty
-    one: a typo'd name is a silent no-op in the router (nothing checks that
-    a name in the set is even a field), while the matching typo in the test
-    list makes the test pass for the wrong reason, because
-    ``extra="forbid"`` turns the unknown key into a 422 that still contains
-    the field name. Green suite, live 500.
-
-    One equality closes all three holes, because ``expected`` is built from
-    the body's own fields:
-
-    * a NOT NULL column missing from the set -- it is in ``expected``;
-    * a nullable column wrongly in the set -- it is not in ``expected``;
-    * a name that is not a field at all -- it cannot be in ``expected``.
-
-    Model-vs-database drift is a different question, already guarded by
-    ``tests/db/test_models_roundtrip.py`` and ``tests/db/test_schema.py``;
-    this test's chain is schema -> models -> body.
+    The check itself lives in ``tests/api/conftest.py`` -- see
+    :func:`~tests.api.conftest.assert_not_nullable_matches_schema` for what
+    it closes and why it keys on the mapper rather than the table. It moved
+    there in Task 17, when a second router needed the same authority and a
+    divergent copy would have been the one that stopped being updated.
     """
-    expected = {name for name in body.model_fields if not table.columns[name].nullable}
-    assert body._NOT_NULLABLE == expected
+    assert_not_nullable_matches_schema(body, model)
 
 
 @pytest.mark.parametrize("field", NOT_NULL_PROPERTY_FIELDS)

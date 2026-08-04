@@ -1,5 +1,73 @@
 # Progress Log
 
+## Session 2026-08-04 — Task 17 COMPLETE (certificates CRUD)
+
+`POST/GET/PATCH/DELETE /certificates` plus the grouped list. Both steps
+ticked.
+
+**Design decisions the one-line plan did not settle:**
+
+- **Flat routes, not nested under the property.** `docs/domain/compliance.md`
+  names Property the aggregate root, but nesting would give every
+  certificate two URLs and put the property in PATCH/DELETE paths where it
+  adds nothing. The invariant ("one property, one org") is upheld by the
+  org-scoped property lookup on create and on any PATCH that moves one.
+- **Wire name is `certificate_type`, not `type`.** The model maps the column
+  `type` to the attribute `certificate_type`. A body field named `type`
+  would make PATCH's `setattr` loop write a plain Python attribute that
+  never reaches the database — **silently, with a 200 response.** The
+  awkward name is the price of that loop staying honest.
+- **The grouped list excludes properties with no certificates.** Considered
+  including them so the screen could show gaps, and rejected it: nothing
+  records which types a property *requires*, so an empty group cannot answer
+  the question that would justify it. That is a dashboard join with
+  `GET /properties` (Tasks 19–22).
+- **Certificate status is derived on every read**, never stored, per the
+  glossary. Recomputed on GET as well as on create — a status computed once
+  would be right for a day and wrong every day after.
+- **`issue_date <= expiry_date` is validated against the resulting row**, not
+  the request: patching `issue_date` alone still has to agree with the
+  stored `expiry_date`. A transposition is the one data-entry error that
+  silently inverts the answer the page exists to give.
+
+**Two pre-existing defects found while doing it:**
+
+- **The glossary said three certificate types; the schema and spec both said
+  five.** `compliance.md` was the wrong one. Nothing caught it because until
+  Task 17 no code read the set. Fixed, plus `CertificateType` in
+  `src/core/certificates.py` as the Python source of truth and
+  `test_certificate_type_enum_matches_the_python_enum` comparing it to the
+  live SQL enum — the guard `hmrc_category` already had and this did not.
+- **`test_not_nullable_is_exactly_what_the_schema_says` had an unexercised
+  broken path.** It looked up `__table__.columns[field_name]`, which keys on
+  *column* names; every body it had ever run against happened to have no
+  renamed columns. `ComplianceCertificate` is the first that does, and the
+  table form raises `KeyError` there. Now keyed on `__mapper__.columns`
+  (attribute names) and moved to `tests/api/conftest.py` as
+  `assert_not_nullable_matches_schema`, shared by both router suites rather
+  than copied.
+
+**Nine mutations, all killed.** Notably one *found a weak test*: the status
+boundary cases originally used `days(EXPIRING_WINDOW_DAYS)`, so changing the
+constant to 59 or 61 moved input and expectation together and left them
+green — the case restated the implementation instead of pinning it. Now
+literal 60 and 61. The rest: expiring-today counted as expired; window
+narrowed and widened; org filter dropped from the grouped list; property and
+document ownership checks removed (each a 404-vs-500 case, since 0002's
+composite FKs already make the write impossible); the date guard disabled;
+the PATCH date guard reading only the request; `expiry_date` dropped from
+`_NOT_NULLABLE` (which killed the relocated authority test — proving the
+mapper-keyed lookup works on the renamed column).
+
+**Scope explicitly NOT covered, and Mahmud should know:** `document_id` is
+settable and validated, but **nothing in this system can create a
+`documents` row for a certificate.** The only writer is `exports.py` and the
+only buckets are `statements` and `exports`. Certificate *file upload* needs
+a `certificates` bucket plus an endpoint, and is not in Task 17 — the spec's
+MVP line is "manual entry of dates, expiry highlighting". Tests seed a
+`documents` row directly to exercise the reference.
+
+
 ## Session 2026-08-04 — Task 16 COMPLETE (quarterly export endpoint)
 
 `POST /exports/quarter` lands. Steps 2, 2b, 3 and 4 all ticked; 350 tests

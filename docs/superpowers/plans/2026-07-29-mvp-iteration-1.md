@@ -622,8 +622,8 @@ Stage 2 returned ⚠️ APPROVED WITH NITS. Nothing blocks ticking 13b, but thes
 - Create: `backend/src/api/routers/certificates.py`
 - Test: `backend/tests/api/test_certificates.py`
 
-- [ ] **Step 1:** Failing tests: CRUD for `compliance_certificates` incl. document upload ref; derived `status` in responses: `expired` (past), `expiring` (≤60 days), `valid`; list endpoint groups by property.
-- [ ] **Step 2:** Implement, PASS, commit.
+- [x] **Step 1:** Failing tests: CRUD for `compliance_certificates` incl. document upload ref; derived `status` in responses: `expired` (past), `expiring` (≤60 days), `valid`; list endpoint groups by property.
+- [x] **Step 2:** Implement, PASS, commit.
 
 ---
 
