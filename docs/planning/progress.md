@@ -1,5 +1,63 @@
 # Progress Log
 
+## Session 2026-08-04 — Barclays registered, Task 18 COMPLETE (worker)
+
+**Barclays.** Mahmud supplied `data.csv`, closing the last real format gap.
+It turned out to be the *simplest* format in the portfolio — headered, six
+columns, one signed `Amount`, dd/mm/yyyy, UTF-8. Both awkward things are
+whitespace: `Memo` is a fixed-width mainframe field with padding runs and
+unquoted embedded tabs (new opt-in `collapse_whitespace`), and the file's
+trailing line contains only a tab, which widened the EOF tolerance from "an
+empty row" to "a row whose cells are all blank once stripped". Verified
+against the real export: 10 rows, net −£282.82. Fixture sanitised.
+Seven mutations killed.
+
+**Task 18 — the worker.** Three transactions per job, and the split is the
+design: the claim commits immediately (else the row stays locked for the
+whole job and `SKIP LOCKED` protects against the wrong thing), the handler
+gets its own, and **failure gets a third** because the handler's is already
+rolled back and would discard the record of why it failed.
+
+**Two measured findings that changed the design:**
+
+- **`crewai/llm.py` calls `load_dotenv()` at module scope.** So a telemetry
+  check made *after* importing CrewAI passes because CrewAI itself just set
+  the variable from a `.env` on disk — proving a file exists, not that the
+  deployed environment is configured. The guard therefore runs first, and
+  `handle_categorise` imports the flow lazily to keep that ordering real.
+  The lazy import is load-bearing, not style.
+- **`CREWAI_TELEMETRY_OPT_OUT` is read by NO installed package.** Grepped
+  the whole of site-packages. It is the CrewAI 0.x spelling; 1.15.8 reads
+  `OTEL_SDK_DISABLED`, `CREWAI_DISABLE_TELEMETRY`, `CREWAI_DISABLE_TRACKING`.
+  The plan and `.env` both name the dead one. `OTEL_SDK_DISABLED` was also
+  set, so telemetry *was* off — but by one of the two variables, not both.
+  `.env.example` now says which works and why the other is kept.
+
+**A weak test of mine, found by mutation.** Dropping `SKIP LOCKED` did not
+break the two-concurrent-claims test: plain `FOR UPDATE` also yields
+different jobs, because the loser blocks and Postgres then re-evaluates onto
+the next queued row. `SKIP LOCKED` is about *not blocking*, so the
+replacement test holds a lock from a separate connection and asserts the
+locked job is stepped over. Ten mutations now die.
+
+**The `make dev` trap was measured, not assumed.** Claimed `kill 0` prevents
+orphans; tested it with stand-in processes, killing make itself (a plain
+Ctrl-C reaches the children directly and so does not discriminate). Without
+the trap two children survived; with it, zero.
+
+**Cross-directory ordering re-verified.** `tests/worker/conftest.py`
+re-exports api fixtures including the autouse `_dispose_app_engine` — autouse
+does *not* follow a plain import, and that asymmetry was Task 13a's bug. Ran
+`pytest tests/worker tests/api`, the reverse, and `tests/db tests/worker`.
+
+**Open question for Mahmud, not decided here:** after a successful
+categorisation the import stays `parsed`, because `import_status` has no
+`categorised` value. So the imports screen (Task 20) cannot distinguish
+"parsed, awaiting categorisation" from "parsed, proposals ready". Adding an
+enum value is a migration and a product decision, so it was flagged rather
+than taken.
+
+
 ## Session 2026-08-04 — Task 17 COMPLETE (certificates CRUD)
 
 `POST/GET/PATCH/DELETE /certificates` plus the grouped list. Both steps
