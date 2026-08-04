@@ -1,5 +1,66 @@
 # Progress Log
 
+## Session 2026-08-04 — Task 16 COMPLETE (quarterly export endpoint)
+
+`POST /exports/quarter` lands. Steps 2, 2b, 3 and 4 all ticked; 350 tests
+green, ruff clean. Commits `2d4a08e`, `938818d`, `8b12a9b`, `9c09393`,
+`b04f156`.
+
+**Decisions taken here, because the plan did not settle them:**
+
+- **Every transaction in the org is a candidate, not just the exporting
+  entity's.** An unreviewed line has no category and no property, so there
+  is no way to know whose figures it would land on; once reviewed it may
+  attach to a jointly-owned property and move every co-owner's totals.
+  Filtering by `transactions.entity_id` would filter on the one attribute
+  that does *not* decide attribution. Costs the user a stricter block
+  (anyone's unreviewed line stops everyone's export) and buys correctness.
+- **Changed history is 409, not 422** — a new status idiom in this repo.
+  Nothing about the request is wrong; what conflicts is previously filed
+  state, and the UI has to distinguish "go review these lines" from
+  "reconcile a filed period".
+- **A separate `exports` storage bucket** (`0004_exports_bucket.sql`),
+  mirroring 0003 including the do-not-cast-to-uuid trap. One bucket would
+  work — the predicate is text-compared — but a filed return under a path
+  saying `statements/` is a lie the next reader trips on.
+- **`generated_document_id` points at the PDF.** It is a single FK and
+  three files are produced; the CSVs come back in the response.
+
+**Two gaps found by writing the tests, not by review:**
+
+- `InvalidOwnershipError` did not name the property. Across twelve
+  properties, "shares sum to 50" tells the user a return cannot be filed
+  and nothing about how to fix it. `cumulative_totals` now re-raises with
+  the property id — it is the innermost place that knows, since
+  `split_amount` only ever sees a share map.
+- History had to be compared against the **latest** version of each filed
+  quarter (`DISTINCT ON (quarter) ORDER BY quarter, version DESC`).
+  Comparing a superseded version would refuse a correct return: Q1 filed
+  at 500 then re-filed at 1200 agrees with data that recomputes to 1200.
+
+**Mutation results — six on the router, each killing exactly one test:**
+drop the `assert_history_intact` call (without this the whole of Step 2b is
+decorative and the core suite stays green); `version desc` → `asc`; filter
+transactions by entity; drop the org filter from the transaction query
+(the one that leaks *money*, not ids); pin version to 1; pre-sign the
+amount instead of passing magnitude + direction. Four more on the new core
+code. `__pycache__` cleared between every mutation and run — the stale-pyc
+trap that invalidated two results earlier in this project.
+
+**weasyprint needs `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` on
+macOS.** Homebrew installs libgobject/pango/cairo outside dyld's search
+path, so `import weasyprint` raises `OSError` without it — pango being in
+`brew list` is not sufficient. Now in `.env` and `.env.example`, and it
+reaches the process through `uv run --env-file ../.env` (verified). The
+import is at module scope on purpose: a missing rendering stack should
+stop the API booting, not surface halfway through an export with CSVs
+already in the bucket.
+
+**Known limitation, not fixed:** an upload that succeeds followed by a
+failed commit leaves orphaned objects in the bucket. `imports.py` has the
+same characteristic. No reaper exists.
+
+
 ## Session 2026-07-29 (scoping continued)
 - Design v2 approved by Mahmud (Flutter stack, validated data model, lean MVP)
 - Repo created: /Users/mahmud/projects/landlord-compliance-agent (git, commit 681bc19)

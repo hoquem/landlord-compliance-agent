@@ -28,7 +28,7 @@ this repo has been bitten by both:
 
 `ENGINEERING.md` has the rest. Read it before writing code.
 
-## Three things that will waste your time if you don't know them
+## Four things that will waste your time if you don't know them
 
 1. **Run project commands from `backend/`.** From the repo root `uv run` finds
    no project and silently falls back to ambient Anaconda tooling.
@@ -36,3 +36,7 @@ this repo has been bitten by both:
    with the local Supabase stack up (`supabase start` from the repo root).
 3. **RLS does not protect the API.** `DATABASE_URL` is a superuser. Manual
    `org_id` filtering is the entire tenant boundary.
+4. **On macOS, weasyprint needs `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`**
+   (it is in `.env`). Homebrew puts libgobject/pango/cairo outside dyld's
+   search path, so `import weasyprint` — and therefore the whole API — dies
+   with `OSError` without it. Having pango installed is not sufficient.
