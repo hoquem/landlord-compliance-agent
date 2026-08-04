@@ -904,3 +904,93 @@ async def test_authenticated_cannot_delete_an_org_mates_users_row(
     finally:
         await conn.close()
     assert remaining == 1, "user A2's row must still exist after the rejected delete"
+
+
+async def test_storage_objects_are_isolated_by_org_path_prefix(
+    cross_tenant_fixture: _CrossTenantFixture,
+) -> None:
+    """User B must not read a statement stored under user A's org prefix.
+
+    Task 14 Step 0. Bank statements are the most sensitive data in this
+    system, and ``public.documents.storage_path`` is free text, so the table
+    cannot enforce path isolation -- a row claiming another org's path is
+    just a string. The ``storage.objects`` policies in ``0003_storage.sql``
+    are the only thing that does, and this exercises them over the real
+    Storage API with real JWTs.
+
+    Includes a positive control: user A reading their **own** object must
+    succeed, so that user B's refusal is evidence of isolation rather than
+    evidence that uploads are silently broken.
+    """
+    supabase_url = _supabase_url()
+    anon_key = _anon_key()
+    path = f"{cross_tenant_fixture.org_a_id}/2026/statement.csv"
+    body = b"Date,Description,Amount,Balance\n01/07/2026,RENT,1200.00,1200.00\n"
+
+    async with httpx.AsyncClient() as client:
+        upload = await client.post(
+            f"{supabase_url}/storage/v1/object/statements/{path}",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {cross_tenant_fixture.jwt_a}",
+                "Content-Type": "text/csv",
+            },
+            content=body,
+        )
+        assert upload.status_code == 200, (
+            f"user A must be able to upload under their own org prefix: "
+            f"{upload.status_code} {upload.text}"
+        )
+
+        own = await client.get(
+            f"{supabase_url}/storage/v1/object/statements/{path}",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {cross_tenant_fixture.jwt_a}",
+            },
+        )
+        assert own.status_code == 200, (
+            f"positive control failed -- user A cannot read their own object: "
+            f"{own.status_code} {own.text}"
+        )
+        assert own.content == body
+
+        cross = await client.get(
+            f"{supabase_url}/storage/v1/object/statements/{path}",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {cross_tenant_fixture.jwt_b}",
+            },
+        )
+        assert cross.status_code != 200, (
+            f"user B read user A's statement -- storage isolation is broken: "
+            f"{cross.status_code} {cross.text[:200]}"
+        )
+        assert body not in cross.content, "user B must not receive the file contents"
+
+
+async def test_authenticated_cannot_upload_outside_their_org_prefix(
+    cross_tenant_fixture: _CrossTenantFixture,
+) -> None:
+    """Writing into another org's prefix is refused, not merely reading from it.
+
+    A write-side hole would be worse than a read-side one: it lets one org
+    plant a file another org's import would then ingest as its own.
+    """
+    supabase_url = _supabase_url()
+    anon_key = _anon_key()
+    path = f"{cross_tenant_fixture.org_a_id}/2026/planted.csv"
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{supabase_url}/storage/v1/object/statements/{path}",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {cross_tenant_fixture.jwt_b}",
+                "Content-Type": "text/csv",
+            },
+            content=b"Date,Description,Amount,Balance\n",
+        )
+        assert resp.status_code != 200, (
+            f"user B uploaded into user A's org prefix: {resp.status_code} {resp.text[:200]}"
+        )
