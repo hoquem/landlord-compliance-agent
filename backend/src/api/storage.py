@@ -153,6 +153,49 @@ async def upload_statement(org_id: uuid.UUID, filename: str, content: bytes) -> 
     )
 
 
+async def signed_download_url(bucket: str, path: str, *, expires_in: int = 300) -> str:
+    """Mint a short-lived URL for one stored object.
+
+    The buckets are private, which is the point -- a public bucket serves
+    objects to anyone holding the URL, bypassing every policy. So a browser
+    cannot fetch an export directly, and this is how it gets one: the API
+    proves the caller owns the document, then asks storage for a URL that
+    expires.
+
+    Five minutes by default. Long enough to click, short enough that a URL
+    copied out of a browser history is worthless by the time anyone tries it.
+
+    :param bucket: the bucket the object lives in.
+    :param path: the object path.
+    :param expires_in: lifetime in seconds.
+    :raises StorageUploadError: if storage refuses or cannot be reached.
+    :returns: an absolute, time-limited URL.
+    """
+    base_url = os.environ["SUPABASE_URL"]
+    service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{base_url}/storage/v1/object/sign/{bucket}/{path}",
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": expires_in},
+            )
+    except httpx.HTTPError as exc:
+        raise StorageUploadError(f"could not reach storage for {path!r}: {exc}") from exc
+
+    if resp.status_code >= 300:
+        raise StorageUploadError(
+            f"storage refused to sign {path!r}: {resp.status_code} {resp.text[:200]}"
+        )
+    # The API returns a path relative to /storage/v1, not an absolute URL.
+    return f"{base_url}/storage/v1{resp.json()['signedURL']}"
+
+
 async def upload_export(
     org_id: uuid.UUID, filename: str, content: bytes, content_type: str
 ) -> str:

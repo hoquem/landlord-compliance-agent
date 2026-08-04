@@ -49,6 +49,21 @@ class HttpApiClient implements ApiClient {
     throw ApiException(response.statusCode, detail);
   }
 
+  static String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  Future<Object?> _postJson(String path, Map<String, Object?> body) async {
+    final http.Response response = await _client.post(
+      Uri.parse('$baseUrl$path'),
+      headers: <String, String>{..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (response.statusCode >= 300) _fail(response);
+    return response.body.isEmpty ? null : jsonDecode(response.body);
+  }
+
   Future<Object?> _get(String path) async {
     final http.Response response = await _client.get(
       Uri.parse('$baseUrl$path'),
@@ -130,6 +145,118 @@ class HttpApiClient implements ApiClient {
     final http.Response response = await _client.post(
       Uri.parse('$baseUrl/transactions/$transactionId/exclude'),
       headers: _headers,
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
+  Future<DashboardSummary> getDashboard() async =>
+      DashboardSummary.fromJson((await _get('/dashboard'))! as Map<String, dynamic>);
+
+  @override
+  Future<List<PropertyCertificates>> listCertificates() async {
+    final Object? body = await _get('/certificates');
+    return <PropertyCertificates>[
+      for (final Object? row in body! as List<Object?>)
+        PropertyCertificates.fromJson(row! as Map<String, dynamic>),
+    ];
+  }
+
+  @override
+  Future<void> createCertificate({
+    required String propertyId,
+    required String certificateType,
+    required DateTime expiryDate,
+    String? certificateRef,
+  }) async {
+    await _postJson('/certificates', <String, Object?>{
+      'property_id': propertyId,
+      'certificate_type': certificateType,
+      'expiry_date': _isoDate(expiryDate),
+      if (certificateRef != null && certificateRef.isNotEmpty)
+        'certificate_ref': certificateRef,
+    });
+  }
+
+  @override
+  Future<void> deleteCertificate(String certificateId) async {
+    final http.Response response = await _client.delete(
+      Uri.parse('$baseUrl/certificates/$certificateId'),
+      headers: _headers,
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
+  Future<ExportResult> exportQuarter({
+    required String entityId,
+    required int taxYear,
+    required int quarter,
+  }) async {
+    final Object? body = await _postJson('/exports/quarter', <String, Object?>{
+      'entity_id': entityId,
+      'tax_year': taxYear,
+      'quarter': quarter,
+    });
+    return ExportResult.fromJson(body! as Map<String, dynamic>);
+  }
+
+  @override
+  Future<String> downloadUrl(String documentId) async {
+    final Object? body = await _get('/documents/$documentId/download');
+    return (body! as Map<String, dynamic>)['url'] as String;
+  }
+
+  @override
+  Future<void> createEntity({
+    required String name,
+    required String taxRegime,
+  }) async {
+    await _postJson('/entities', <String, Object?>{
+      'name': name,
+      'tax_regime': taxRegime,
+    });
+  }
+
+  @override
+  Future<void> createProperty({
+    required String addressLine1,
+    required String city,
+    required String postcode,
+    required String financeCostClassification,
+  }) async {
+    await _postJson('/properties', <String, Object?>{
+      'address_line1': addressLine1,
+      'city': city,
+      'postcode': postcode,
+      'finance_cost_classification': financeCostClassification,
+    });
+  }
+
+  @override
+  Future<List<OwnershipShare>> getOwnership(String propertyId) async {
+    final Object? body = await _get('/properties/$propertyId/ownership');
+    return <OwnershipShare>[
+      for (final Object? row in body! as List<Object?>)
+        OwnershipShare.fromJson(row! as Map<String, dynamic>),
+    ];
+  }
+
+  @override
+  Future<void> setOwnership(
+    String propertyId,
+    List<OwnershipShare> shares,
+  ) async {
+    final http.Response response = await _client.put(
+      Uri.parse('$baseUrl/properties/$propertyId/ownership'),
+      headers: <String, String>{..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode(<Map<String, Object?>>[
+        for (final OwnershipShare s in shares)
+          <String, Object?>{
+            'entity_id': s.entityId,
+            'percentage': s.percentage.toStringAsFixed(2),
+          },
+      ]),
     );
     if (response.statusCode >= 300) _fail(response);
   }

@@ -22,6 +22,7 @@ import '../features/auth/sign_in_screen.dart';
 import '../features/certificates/certificates_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
 import '../features/imports/imports_screen.dart';
+import '../features/portfolio/portfolio_screen.dart';
 import '../features/review/review_screen.dart';
 import 'app_shell.dart';
 
@@ -79,7 +80,7 @@ GoRouter buildRouter({
           GoRoute(
             path: '/',
             builder: (BuildContext context, GoRouterState state) =>
-                const DashboardScreen(),
+                DashboardScreen(api: api),
           ),
           GoRoute(
             path: '/imports',
@@ -92,9 +93,14 @@ GoRouter buildRouter({
                 ReviewScreen(api: api),
           ),
           GoRoute(
+            path: '/portfolio',
+            builder: (BuildContext context, GoRouterState state) =>
+                PortfolioScreen(api: api),
+          ),
+          GoRoute(
             path: '/certificates',
             builder: (BuildContext context, GoRouterState state) =>
-                const CertificatesScreen(),
+                CertificatesScreen(api: api),
           ),
         ],
       ),

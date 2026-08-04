@@ -46,6 +46,12 @@ const List<Destination> kDestinations = <Destination>[
     icon: Icons.verified_outlined,
     selectedIcon: Icons.verified,
   ),
+  Destination(
+    path: '/portfolio',
+    label: 'Portfolio',
+    icon: Icons.home_work_outlined,
+    selectedIcon: Icons.home_work,
+  ),
 ];
 
 /// Index of the destination whose path matches [location], or 0.

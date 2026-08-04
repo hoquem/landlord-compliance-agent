@@ -98,6 +98,123 @@ class FakeApiClient implements ApiClient {
     excludeCalls++;
   }
 
+  DashboardSummary summary = DashboardSummary(
+    needsDecision: 0,
+    nextDeadline: DateTime.utc(2026, 11, 7),
+    daysUntilDeadline: 95,
+    expiringCertificates: 0,
+    expiredCertificates: 0,
+    failedImports: 0,
+  );
+
+  List<PropertyCertificates> certificateGroups = <PropertyCertificates>[];
+  List<Map<String, Object?>> createdCertificates = <Map<String, Object?>>[];
+  List<String> deletedCertificates = <String>[];
+
+  Object? failExport;
+  ExportResult exportResult = const ExportResult(
+    taxYear: '2026-27',
+    quarter: 'Q1',
+    version: 1,
+    documents: <ExportDocument>[
+      ExportDocument(id: 'd1', kind: 'export_category_csv'),
+      ExportDocument(id: 'd2', kind: 'export_pdf'),
+    ],
+  );
+  List<String> downloadedDocuments = <String>[];
+
+  Map<String, List<OwnershipShare>> ownership =
+      <String, List<OwnershipShare>>{};
+  List<List<OwnershipShare>> savedOwnership = <List<OwnershipShare>>[];
+  Object? failSetOwnership;
+  List<Map<String, String>> createdEntities = <Map<String, String>>[];
+  List<Map<String, String>> createdProperties = <Map<String, String>>[];
+
+  @override
+  Future<void> createEntity({
+    required String name,
+    required String taxRegime,
+  }) async {
+    createdEntities.add(<String, String>{'name': name, 'tax_regime': taxRegime});
+  }
+
+  @override
+  Future<void> createProperty({
+    required String addressLine1,
+    required String city,
+    required String postcode,
+    required String financeCostClassification,
+  }) async {
+    createdProperties.add(<String, String>{'address_line1': addressLine1});
+  }
+
+  @override
+  Future<List<OwnershipShare>> getOwnership(String propertyId) async =>
+      ownership[propertyId] ?? <OwnershipShare>[];
+
+  @override
+  Future<void> setOwnership(
+    String propertyId,
+    List<OwnershipShare> shares,
+  ) async {
+    savedOwnership.add(shares);
+    if (failSetOwnership != null) throw failSetOwnership!;
+    ownership[propertyId] = shares;
+  }
+
+  @override
+  Future<DashboardSummary> getDashboard() async => summary;
+
+  @override
+  Future<List<PropertyCertificates>> listCertificates() async =>
+      certificateGroups;
+
+  @override
+  Future<void> createCertificate({
+    required String propertyId,
+    required String certificateType,
+    required DateTime expiryDate,
+    String? certificateRef,
+  }) async {
+    createdCertificates.add(<String, Object?>{
+      'property_id': propertyId,
+      'certificate_type': certificateType,
+      'expiry_date': expiryDate,
+      'certificate_ref': certificateRef,
+    });
+  }
+
+  @override
+  Future<void> deleteCertificate(String certificateId) async {
+    deletedCertificates.add(certificateId);
+    certificateGroups = <PropertyCertificates>[
+      for (final PropertyCertificates g in certificateGroups)
+        PropertyCertificates(
+          propertyId: g.propertyId,
+          certificates: <Certificate>[
+            for (final Certificate c in g.certificates)
+              if (c.id != certificateId) c,
+          ],
+        ),
+    ];
+  }
+
+  @override
+  Future<ExportResult> exportQuarter({
+    required String entityId,
+    required int taxYear,
+    required int quarter,
+  }) async {
+    if (failExport != null) throw failExport!;
+    return exportResult;
+  }
+
+  @override
+  Future<String> downloadUrl(String documentId) async {
+    downloadedDocuments.add(documentId);
+    return 'https://example.test/signed/$documentId';
+  }
+
   @override
   Future<List<String>> listBanks() async => banks;
 
@@ -125,6 +242,21 @@ class FakeApiClient implements ApiClient {
     return created;
   }
 }
+
+/// Build a [Certificate] without repeating every field in each test.
+Certificate aCertificate({
+  String id = 'c1',
+  String propertyId = 'p1',
+  String type = 'gas_safety',
+  String status = 'valid',
+  DateTime? expiry,
+}) => Certificate(
+  id: id,
+  propertyId: propertyId,
+  certificateType: type,
+  expiryDate: expiry ?? DateTime.utc(2027, 3, 1),
+  status: status,
+);
 
 /// Build a [Txn] without repeating every field in each test.
 Txn aTxn({

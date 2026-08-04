@@ -205,3 +205,173 @@ class Txn {
 /// it is "look here first", and tinting it would collide with the status
 /// vocabulary and imply the agent erred by being unsure.
 const double kLowConfidence = 0.8;
+
+/// What is waiting on the user, from `GET /dashboard`.
+///
+/// The deadline is **computed by the backend** and only rendered here.
+/// `core/quarters.py` owns the four statutory dates and has unit tests
+/// pinning all of them; a second implementation in Dart would be a second
+/// opinion about a tax deadline, and the failure mode is filing late.
+class DashboardSummary {
+  const DashboardSummary({
+    required this.needsDecision,
+    required this.nextDeadline,
+    required this.daysUntilDeadline,
+    required this.expiringCertificates,
+    required this.expiredCertificates,
+    required this.failedImports,
+  });
+
+  factory DashboardSummary.fromJson(Map<String, dynamic> json) =>
+      DashboardSummary(
+        needsDecision: json['needs_decision'] as int,
+        nextDeadline: DateTime.parse(json['next_deadline'] as String),
+        daysUntilDeadline: json['days_until_deadline'] as int,
+        expiringCertificates: json['expiring_certificates'] as int,
+        expiredCertificates: json['expired_certificates'] as int,
+        failedImports: json['failed_imports'] as int,
+      );
+
+  final int needsDecision;
+  final DateTime nextDeadline;
+  final int daysUntilDeadline;
+  final int expiringCertificates;
+  final int expiredCertificates;
+  final int failedImports;
+
+  /// Whether anything at all is outstanding.
+  bool get allClear =>
+      needsDecision == 0 &&
+      expiringCertificates == 0 &&
+      expiredCertificates == 0 &&
+      failedImports == 0;
+}
+
+/// One compliance certificate, with the status the API derived for it.
+class Certificate {
+  const Certificate({
+    required this.id,
+    required this.propertyId,
+    required this.certificateType,
+    required this.expiryDate,
+    required this.status,
+    this.issueDate,
+    this.certificateRef,
+  });
+
+  factory Certificate.fromJson(Map<String, dynamic> json) => Certificate(
+    id: json['id'] as String,
+    propertyId: json['property_id'] as String,
+    certificateType: json['certificate_type'] as String,
+    expiryDate: DateTime.parse(json['expiry_date'] as String),
+    status: json['status'] as String,
+    issueDate: json['issue_date'] == null
+        ? null
+        : DateTime.parse(json['issue_date'] as String),
+    certificateRef: json['certificate_ref'] as String?,
+  );
+
+  final String id;
+  final String propertyId;
+  final String certificateType;
+  final DateTime expiryDate;
+
+  /// `expired`, `expiring` or `valid` — derived by the API on every read,
+  /// never stored. A cached flag goes stale exactly when it matters.
+  final String status;
+
+  final DateTime? issueDate;
+  final String? certificateRef;
+
+  WorkState get state => switch (status) {
+    'expired' => WorkState.wrong,
+    'expiring' => WorkState.needsYou,
+    'valid' => WorkState.settled,
+    _ => WorkState.working,
+  };
+
+  String get label => switch (status) {
+    'expired' => 'Expired',
+    'expiring' => 'Expiring',
+    'valid' => 'Valid',
+    _ => status,
+  };
+}
+
+/// One property's certificates, as the grouped list returns them.
+class PropertyCertificates {
+  const PropertyCertificates({
+    required this.propertyId,
+    required this.certificates,
+  });
+
+  factory PropertyCertificates.fromJson(Map<String, dynamic> json) =>
+      PropertyCertificates(
+        propertyId: json['property_id'] as String,
+        certificates: <Certificate>[
+          for (final Object? c in json['certificates'] as List<Object?>)
+            Certificate.fromJson(c! as Map<String, dynamic>),
+        ],
+      );
+
+  final String propertyId;
+  final List<Certificate> certificates;
+}
+
+/// The outcome of one quarterly export.
+class ExportResult {
+  const ExportResult({
+    required this.taxYear,
+    required this.quarter,
+    required this.documents,
+    this.version,
+  });
+
+  factory ExportResult.fromJson(Map<String, dynamic> json) => ExportResult(
+    taxYear: json['tax_year'] as String,
+    quarter: json['quarter'] as String,
+    version: json['version'] as int?,
+    documents: <ExportDocument>[
+      for (final Object? d in json['documents'] as List<Object?>)
+        ExportDocument.fromJson(d! as Map<String, dynamic>),
+    ],
+  );
+
+  final String taxYear;
+  final String quarter;
+
+  /// Null for a company: outside MTD ITSA, so nothing is filed.
+  final int? version;
+
+  final List<ExportDocument> documents;
+}
+
+class ExportDocument {
+  const ExportDocument({required this.id, required this.kind});
+
+  factory ExportDocument.fromJson(Map<String, dynamic> json) =>
+      ExportDocument(id: json['id'] as String, kind: json['kind'] as String);
+
+  final String id;
+  final String kind;
+
+  String get label => switch (kind) {
+    'export_category_csv' => 'Return figures (CSV)',
+    'export_property_csv' => 'Per-property detail (CSV)',
+    'export_pdf' => 'Summary (PDF)',
+    _ => kind,
+  };
+}
+
+/// One entity's share of one property.
+class OwnershipShare {
+  const OwnershipShare({required this.entityId, required this.percentage});
+
+  factory OwnershipShare.fromJson(Map<String, dynamic> json) => OwnershipShare(
+    entityId: json['entity_id'] as String,
+    percentage: double.parse('${json['percentage']}'),
+  );
+
+  final String entityId;
+  final double percentage;
+}

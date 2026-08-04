@@ -94,6 +94,55 @@ abstract class ApiClient {
   /// Mark one transaction as outside the property business.
   Future<void> excludeTransaction(String transactionId);
 
+  /// What is waiting on the user, including the next statutory deadline.
+  Future<DashboardSummary> getDashboard();
+
+  /// Certificates, grouped by property.
+  Future<List<PropertyCertificates>> listCertificates();
+
+  /// Record one certificate.
+  Future<void> createCertificate({
+    required String propertyId,
+    required String certificateType,
+    required DateTime expiryDate,
+    String? certificateRef,
+  });
+
+  /// Remove one certificate. A superseded or mis-entered one has no value
+  /// to keep; what it was survives in the audit row.
+  Future<void> deleteCertificate(String certificateId);
+
+  /// Generate a quarter's export pack.
+  Future<ExportResult> exportQuarter({
+    required String entityId,
+    required int taxYear,
+    required int quarter,
+  });
+
+  /// A short-lived URL for one generated document.
+  Future<String> downloadUrl(String documentId);
+
+  /// Create an entity.
+  Future<void> createEntity({required String name, required String taxRegime});
+
+  /// Create a property.
+  Future<void> createProperty({
+    required String addressLine1,
+    required String city,
+    required String postcode,
+    required String financeCostClassification,
+  });
+
+  /// One property's current ownership set.
+  Future<List<OwnershipShare>> getOwnership(String propertyId);
+
+  /// Replace one property's ownership set.
+  ///
+  /// The **complete** set, not a delta: the API validates that it sums to
+  /// exactly 100, and a partial update could not be checked against that
+  /// rule without reading the rest first.
+  Future<void> setOwnership(String propertyId, List<OwnershipShare> shares);
+
   /// Bank names the parser accepts.
   ///
   /// Fetched rather than hard-coded: `core/parser.py`'s registry is the

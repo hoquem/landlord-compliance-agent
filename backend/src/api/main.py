@@ -7,10 +7,20 @@ either is missing -- a deployment without them must not start.
 
 from fastapi import FastAPI
 
-from src.api.routers import certificates, exports, imports, portfolio, transactions
+from src.api.routers import (
+    certificates,
+    dashboard,
+    documents,
+    exports,
+    imports,
+    portfolio,
+    transactions,
+)
 
 app = FastAPI()
 app.include_router(certificates.router)
+app.include_router(dashboard.router)
+app.include_router(documents.router)
 app.include_router(exports.router)
 app.include_router(imports.router)
 app.include_router(portfolio.router)

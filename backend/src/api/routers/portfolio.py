@@ -358,6 +358,27 @@ class OwnershipRead(BaseModel):
     entity_id: uuid.UUID
     percentage: Decimal
 
+    @classmethod
+    def of(cls, row: PropertyOwnership) -> "OwnershipRead":
+        """Build from a mapped row.
+
+        Not ``model_validate``: the column is ``ownership_percentage`` and
+        the field is ``percentage``, so ``from_attributes`` would not find
+        it. A constructor here rather than the same five lines at each
+        endpoint, because two copies of a field mapping is how one of them
+        stops being updated.
+
+        :param row: the mapped ownership row.
+        :returns: the response model.
+        """
+        return cls(
+            id=row.id,
+            org_id=row.org_id,
+            property_id=row.property_id,
+            entity_id=row.entity_id,
+            percentage=row.ownership_percentage,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Small shared helpers.
@@ -569,6 +590,39 @@ async def update_property(
 # ---------------------------------------------------------------------------
 # Ownership -- the money-critical endpoint.
 # ---------------------------------------------------------------------------
+@router.get("/properties/{property_id}/ownership")
+async def get_property_ownership(
+    property_id: uuid.UUID, auth: CurrentAuth
+) -> list[OwnershipRead]:
+    """Read one property's current ownership set.
+
+    Exists so the ownership editor can load what is there before replacing
+    it. ``PUT`` takes the **complete** set, so an editor that could not read
+    first would have to reconstruct it from memory -- and the failure mode
+    of getting that wrong is a silently misattributed tax figure.
+
+    Returns an empty list for a property whose shares were never set, which
+    is a real state: ``0001_core.sql`` deliberately allows it so ownership
+    can be edited row by row through transiently invalid totals.
+
+    :param property_id: the property to read.
+    :param auth: the authenticated caller.
+    :raises HTTPException: 404 if the property is not theirs.
+    :returns: the current shares, ordered by entity id for stability.
+    """
+    async with async_session_factory() as session:
+        await get_owned_or_404(session, Property, property_id, auth, what="property")
+        rows = await session.scalars(
+            select(PropertyOwnership)
+            .where(
+                PropertyOwnership.property_id == property_id,
+                PropertyOwnership.org_id == auth.org_id,
+            )
+            .order_by(PropertyOwnership.entity_id)
+        )
+        return [OwnershipRead.of(row) for row in rows]
+
+
 @router.put("/properties/{property_id}/ownership")
 async def replace_property_ownership(
     property_id: uuid.UUID,
@@ -693,15 +747,6 @@ async def replace_property_ownership(
         session.add(
             _audit(auth, "ownership.replaced", before=before, after=_share_payloads(rows))
         )
-        replaced = [
-            OwnershipRead(
-                id=row.id,
-                org_id=row.org_id,
-                property_id=row.property_id,
-                entity_id=row.entity_id,
-                percentage=row.ownership_percentage,
-            )
-            for row in rows
-        ]
+        replaced = [OwnershipRead.of(row) for row in rows]
         await session.commit()
     return replaced

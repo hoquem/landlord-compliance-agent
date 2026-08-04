@@ -1513,3 +1513,51 @@ async def test_seed_org_refuses_to_move_a_user_between_orgs(
             await conn.fetchval("select org_id from users where id = $1", user.user_id)
             == first.org_id
         )
+
+
+async def test_ownership_can_be_read_back(org_user: OrgUser) -> None:
+    """The editor has to load the set before it can replace it.
+
+    ``PUT`` takes the complete set, so an editor that could not read first
+    would reconstruct it from memory -- and getting that wrong is a silently
+    misattributed tax figure, not a visible error.
+    """
+    entity = await create_entity(org_user)
+    prop = await create_property(org_user)
+    resp = await as_user(
+        org_user,
+        "PUT",
+        f"/properties/{prop['id']}/ownership",
+        [{"entity_id": entity["id"], "percentage": "100.00"}],
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await as_user(org_user, "GET", f"/properties/{prop['id']}/ownership")
+
+    assert resp.status_code == 200, resp.text
+    assert [s["percentage"] for s in resp.json()] == ["100.00"]
+    assert resp.json()[0]["entity_id"] == entity["id"]
+
+
+async def test_ownership_of_an_unset_property_is_empty_not_an_error(
+    org_user: OrgUser,
+) -> None:
+    """A property with no shares is a real state, deliberately allowed."""
+    prop = await create_property(org_user)
+
+    resp = await as_user(org_user, "GET", f"/properties/{prop['id']}/ownership")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+async def test_another_orgs_ownership_is_not_readable(make_org_user) -> None:
+    alice = await make_org_user()
+    bob = await make_org_user()
+    bobs_property = await create_property(bob)
+
+    resp = await as_user(
+        alice, "GET", f"/properties/{bobs_property['id']}/ownership"
+    )
+
+    assert resp.status_code == 404, resp.text
