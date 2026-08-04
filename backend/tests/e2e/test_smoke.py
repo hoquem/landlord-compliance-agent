@@ -94,6 +94,13 @@ FIXTURE = Path(__file__).parent.parent / "fixtures" / "statements" / "e2e_smoke.
 #: What the stubbed agent proposes for each statement line, keyed by the
 #: description the prompt carries: ``(category, attach the property?,
 #: confidence)``. Confidences vary because the review screen sorts by them.
+#:
+#: **Every row of the fixture must have an entry here**, and forgetting one
+#: cannot pass quietly: the missing key raises inside the handler, the job is
+#: recorded ``failed``, and the assertion below prints ``job_queue.error``.
+#: Answering short is not an option either --
+#: :func:`~src.flows.categorise._validate_proposals` requires exactly one
+#: proposal per line.
 _PROPOSALS: dict[str, tuple[HmrcCategory, bool, float]] = {
     "RENT RECEIVED 106 SAMPLE CRES": (HmrcCategory.RENT_INCOME, True, 0.96),
     "B&Q LUTON BATHROOM TAP": (HmrcCategory.REPAIRS_MAINTENANCE, True, 0.93),
@@ -176,17 +183,25 @@ def stub_agent(monkeypatch: pytest.MonkeyPatch) -> type[StubAgent]:
 # ---------------------------------------------------------------------------
 # Helpers: reading state the API does not expose, and running the poller.
 # ---------------------------------------------------------------------------
-async def _terminal_job(org_id: uuid.UUID) -> dict | None:
-    """Return the org's job once it has finished, or ``None`` while it runs."""
+async def _terminal_job(org_id: uuid.UUID, import_id: str) -> dict | None:
+    """Return this import's categorise job once it has finished, else ``None``.
+
+    Keyed on the import as well as the org because ``fetchrow`` returns an
+    arbitrary row when several match: the day a second job type enters this
+    org, an unfiltered version would report some other job's status and pass
+    green on the wrong one.
+    """
     async with db() as conn:
         row = await conn.fetchrow(
-            "select * from job_queue where org_id = $1 and status in ('done', 'failed')",
+            "select * from job_queue where org_id = $1 and payload->>'import_id' = $2 "
+            "and status in ('done', 'failed')",
             org_id,
+            import_id,
         )
     return dict(row) if row else None
 
 
-async def _run_worker_until_finished(org_id: uuid.UUID) -> dict:
+async def _run_worker_until_finished(org_id: uuid.UUID, import_id: str) -> dict:
     """Run the real poller loop until the org's job reaches a terminal state.
 
     Waits on ``done`` **or** ``failed`` rather than on proposals appearing.
@@ -195,13 +210,14 @@ async def _run_worker_until_finished(org_id: uuid.UUID) -> dict:
     caller gets the row and can put that text in its assertion message.
 
     :param org_id: the org whose job to wait for.
+    :param import_id: the import the job was queued for.
     :returns: the finished ``job_queue`` row.
     """
     stop = asyncio.Event()
 
     async def wait_for_finish() -> dict:
         while True:
-            row = await _terminal_job(org_id)
+            row = await _terminal_job(org_id, import_id)
             if row is not None:
                 stop.set()
                 return row
@@ -307,7 +323,7 @@ async def test_a_statement_becomes_a_filed_quarter(org_user: OrgUser, stub_agent
     assert [t["status"] for t in listed.json()] == ["unclassified"] * 6
 
     # -- Categorise (the poller, the flow, the stubbed model) ---------------
-    job = await _run_worker_until_finished(org_user.org_id)
+    job = await _run_worker_until_finished(org_user.org_id, import_id)
     assert job["status"] == "done", f"categorise job failed: {job['error']}"
 
     # The prompt really carried the lines, with the parser's sign convention:
