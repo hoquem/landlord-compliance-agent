@@ -60,6 +60,25 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # Inter, bundled rather than fetched via google_fonts. That package pulls
+  # from Google's CDN on first paint, which is an outbound request carrying
+  # the user's IP on a page showing their bank transactions -- the same class
+  # of leak this repo disables CrewAI telemetry to avoid. Four static weights
+  # (300/400/500/600), which is the whole scale in DESIGN.md; ~1.6 MB
+  # uncompressed, and subsetting to Latin is a known, untaken optimisation.
+  # Licence: SIL Open Font License 1.1, shipped at assets/fonts/LICENSE.txt.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Light.ttf
+          weight: 300
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
