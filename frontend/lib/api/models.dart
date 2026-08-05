@@ -219,7 +219,8 @@ class DashboardSummary {
     required this.daysUntilDeadline,
     required this.expiringCertificates,
     required this.expiredCertificates,
-    required this.failedImports,
+    required this.unreadableImports,
+    required this.uncategorisedImports,
   });
 
   factory DashboardSummary.fromJson(Map<String, dynamic> json) =>
@@ -229,7 +230,8 @@ class DashboardSummary {
         daysUntilDeadline: json['days_until_deadline'] as int,
         expiringCertificates: json['expiring_certificates'] as int,
         expiredCertificates: json['expired_certificates'] as int,
-        failedImports: json['failed_imports'] as int,
+        unreadableImports: json['unreadable_imports'] as int,
+        uncategorisedImports: json['uncategorised_imports'] as int,
       );
 
   final int needsDecision;
@@ -237,14 +239,20 @@ class DashboardSummary {
   final int daysUntilDeadline;
   final int expiringCertificates;
   final int expiredCertificates;
-  final int failedImports;
+  /// Files the parser refused -- bad input, fixed by a different export.
+  final int unreadableImports;
+
+  /// Files that parsed cleanly and whose categorisation then failed.
+  /// Deliberately separate: the data is fine and sitting there.
+  final int uncategorisedImports;
 
   /// Whether anything at all is outstanding.
   bool get allClear =>
       needsDecision == 0 &&
       expiringCertificates == 0 &&
       expiredCertificates == 0 &&
-      failedImports == 0;
+      unreadableImports == 0 &&
+      uncategorisedImports == 0;
 }
 
 /// One compliance certificate, with the status the API derived for it.

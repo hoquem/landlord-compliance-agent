@@ -114,11 +114,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
           goLabel: 'Review',
           onGo: () => context.go('/review'),
         ),
-      if (s.failedImports > 0)
+      // Two lines, not one. A file that could not be read is bad input and
+      // wants a different export from the bank; a file that was read and
+      // then could not be categorised is our failure, and its data is fine
+      // and waiting. Merged, they read as "2 imports could not be read" —
+      // half untrue, and it buried the actionable one.
+      if (s.unreadableImports > 0)
         _Line(
-          text: s.failedImports == 1
+          text: s.unreadableImports == 1
               ? '1 import could not be read.'
-              : '${s.failedImports} imports could not be read.',
+              : '${s.unreadableImports} imports could not be read.',
+          state: WorkState.wrong,
+          goLabel: 'Imports',
+          onGo: () => context.go('/imports'),
+        ),
+      if (s.uncategorisedImports > 0)
+        _Line(
+          text: s.uncategorisedImports == 1
+              ? '1 import was read but could not be categorised.'
+              : '${s.uncategorisedImports} imports were read but could not be '
+                    'categorised.',
           state: WorkState.wrong,
           goLabel: 'Imports',
           onGo: () => context.go('/imports'),

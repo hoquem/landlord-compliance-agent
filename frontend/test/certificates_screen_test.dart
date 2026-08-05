@@ -50,7 +50,11 @@ void main() {
 
     expect(find.text('98A Sample Rd'), findsOneWidget);
     expect(find.text('Gas safety'), findsOneWidget);
-    expect(find.text('Eicr'), findsOneWidget);
+    // Was `find.text('Eicr')` until 2026-08-05 — this test *pinned the bug*.
+    // It asserted the label as derivation happened to produce it, so the
+    // screen could read "Eicr" beneath a subtitle reading "EICR" and the
+    // suite stayed green. Changed deliberately, with the behaviour.
+    expect(find.text('EICR'), findsOneWidget);
   });
 
   testWidgets('each state carries its word, not just a colour', (tester) async {

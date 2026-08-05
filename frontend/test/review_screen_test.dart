@@ -171,6 +171,20 @@ void main() {
       expect(find.text('check this'), findsOneWidget);
     });
 
+    testWidgets('a confirmed line stops asking to be checked', (tester) async {
+      // "check this" is an instruction, and once a human has confirmed the
+      // line the instruction is stale -- they *did* check it. The flag was
+      // driven by confidence alone, which never changes, so five settled rows
+      // sat there still nagging. Seen on a real quarter, 2026-08-05.
+      final FakeApiClient api = FakeApiClient()
+        ..txns = <Txn>[aTxn(confidence: 0.41, status: 'confirmed')];
+
+      await pumpReview(tester, api);
+
+      expect(find.text('Rent income'), findsOneWidget);
+      expect(find.text('check this'), findsNothing);
+    });
+
     testWidgets('a confident proposal is semibold and unflagged', (
       tester,
     ) async {

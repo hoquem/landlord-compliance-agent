@@ -76,7 +76,8 @@ async def test_an_empty_org_has_nothing_waiting(org_user: OrgUser) -> None:
 
     assert body["needs_decision"] == 0
     assert body["expiring_certificates"] == 0
-    assert body["failed_imports"] == 0
+    assert body["unreadable_imports"] == 0
+    assert body["uncategorised_imports"] == 0
 
 
 async def test_proposed_lines_count_as_needing_a_decision(org_user: OrgUser) -> None:
@@ -142,7 +143,15 @@ async def test_certificates_are_counted_by_derived_status(
 
 
 async def test_failed_imports_are_surfaced(org_user: OrgUser) -> None:
-    """A dead import must not be invisible from the one screen you check."""
+    """A dead import must not be invisible from the one screen you check.
+
+    **Counted apart, because they are not the same problem.** A file that
+    could not be *read* is bad input and the fix is a different export. A
+    file that was read and then could not be *categorised* is our side
+    falling over -- the data is fine and sitting there. Seen for real on
+    2026-08-05: one of each at once, reported as "2 imports could not be
+    read", which was half false and hid the actionable one.
+    """
     entity_id = await seed_entity(org_user)
     async with db() as conn:
         for status in ("failed", "categorisation_failed", "parsed"):
@@ -154,7 +163,9 @@ async def test_failed_imports_are_surfaced(org_user: OrgUser) -> None:
                 status,
             )
 
-    assert (await dashboard(org_user))["failed_imports"] == 2
+    body = await dashboard(org_user)
+    assert body["unreadable_imports"] == 1
+    assert body["uncategorised_imports"] == 1
 
 
 async def test_another_orgs_work_is_never_counted(make_org_user) -> None:

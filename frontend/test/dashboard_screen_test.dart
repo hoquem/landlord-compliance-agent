@@ -41,14 +41,16 @@ DashboardSummary summary({
   DateTime? deadline,
   int expiring = 0,
   int expired = 0,
-  int failedImports = 0,
+  int unreadableImports = 0,
+  int uncategorisedImports = 0,
 }) => DashboardSummary(
   needsDecision: needsDecision,
   nextDeadline: deadline ?? DateTime.utc(2026, 11, 7),
   daysUntilDeadline: days,
   expiringCertificates: expiring,
   expiredCertificates: expired,
-  failedImports: failedImports,
+  unreadableImports: unreadableImports,
+  uncategorisedImports: uncategorisedImports,
 );
 
 void main() {
@@ -118,7 +120,13 @@ void main() {
 
     testWidgets('one of anything reads as one, not "1 lines"', (tester) async {
       final FakeApiClient api = FakeApiClient()
-        ..summary = summary(needsDecision: 1, expiring: 1, expired: 1, failedImports: 1);
+        ..summary = summary(
+          needsDecision: 1,
+          expiring: 1,
+          expired: 1,
+          unreadableImports: 1,
+          uncategorisedImports: 1,
+        );
 
       await pumpDashboard(tester, api);
 
@@ -126,6 +134,30 @@ void main() {
       expect(find.text('1 certificate lapses within 60 days.'), findsOneWidget);
       expect(find.text('1 certificate has lapsed.'), findsOneWidget);
       expect(find.text('1 import could not be read.'), findsOneWidget);
+      expect(
+        find.text('1 import was read but could not be categorised.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('an unreadable file and an uncategorised one are not the same', (
+      tester,
+    ) async {
+      // Seen for real 2026-08-05: one file genuinely could not be parsed, and
+      // one was parsed perfectly before the model fell over. The screen said
+      // "2 imports could not be read" — half false, and it buried the one
+      // whose data is fine and sitting there waiting.
+      final FakeApiClient api = FakeApiClient()
+        ..summary = summary(unreadableImports: 1, uncategorisedImports: 1);
+
+      await pumpDashboard(tester, api);
+
+      expect(find.text('2 imports could not be read.'), findsNothing);
+      expect(find.text('1 import could not be read.'), findsOneWidget);
+      expect(
+        find.text('1 import was read but could not be categorised.'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('a lapsed certificate reads as wrong, not merely pending', (

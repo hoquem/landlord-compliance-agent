@@ -104,7 +104,8 @@ class FakeApiClient implements ApiClient {
     daysUntilDeadline: 95,
     expiringCertificates: 0,
     expiredCertificates: 0,
-    failedImports: 0,
+    unreadableImports: 0,
+    uncategorisedImports: 0,
   );
 
   List<PropertyCertificates> certificateGroups = <PropertyCertificates>[];

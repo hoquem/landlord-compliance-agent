@@ -45,7 +45,13 @@ class DashboardRead(BaseModel):
         the deadline has passed, which is worth showing rather than hiding.
     :ivar expiring_certificates: certificates within 60 days of lapsing.
     :ivar expired_certificates: certificates already lapsed.
-    :ivar failed_imports: imports that could not be read or categorised.
+    :ivar unreadable_imports: files the parser refused. Bad input; the fix is
+        a different export from the bank.
+    :ivar uncategorised_imports: files that parsed cleanly and whose
+        categorisation then failed. **Not the same problem** -- the data is
+        fine and sitting there, and the fix is on our side. They were one
+        field until 2026-08-05, which rendered as "2 imports could not be
+        read" when one of them had been read perfectly.
     """
 
     needs_decision: int
@@ -53,7 +59,8 @@ class DashboardRead(BaseModel):
     days_until_deadline: int
     expiring_certificates: int
     expired_certificates: int
-    failed_imports: int
+    unreadable_imports: int
+    uncategorised_imports: int
 
 
 @router.get("/dashboard")
@@ -74,14 +81,15 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
                 Transaction.status.in_(("unclassified", "proposed")),
             )
         )
-        failed_imports = await session.scalar(
-            select(func.count())
-            .select_from(Import)
-            .where(
-                Import.org_id == auth.org_id,
-                Import.status.in_(("failed", "categorisation_failed")),
+        async def count_imports(status: str) -> int:
+            return await session.scalar(
+                select(func.count())
+                .select_from(Import)
+                .where(Import.org_id == auth.org_id, Import.status == status)
             )
-        )
+
+        unreadable_imports = await count_imports("failed")
+        uncategorised_imports = await count_imports("categorisation_failed")
         # Statuses are derived, never stored, so the rows come back and the
         # counting happens against `certificate_status` -- the same function
         # the certificates screen shows. Counting in SQL would be a second
@@ -107,5 +115,6 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
         days_until_deadline=(deadline - today).days,
         expiring_certificates=expiring,
         expired_certificates=expired,
-        failed_imports=failed_imports or 0,
+        unreadable_imports=unreadable_imports or 0,
+        uncategorised_imports=uncategorised_imports or 0,
     )

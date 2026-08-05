@@ -282,7 +282,14 @@ class _ReviewRow extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (_uncertain) ...<Widget>[
+                            // Gated on `!settled`, not on confidence alone.
+                            // "check this" is an instruction, and a human who
+                            // has confirmed the line has already followed it;
+                            // confidence never changes afterwards, so the
+                            // ungated version left settled rows nagging about
+                            // work that was done. Pinned by
+                            // `a confirmed line stops asking to be checked`.
+                            if (_uncertain && !settled) ...<Widget>[
                               const SizedBox(width: Spacing.sm),
                               Text(
                                 'check this',
