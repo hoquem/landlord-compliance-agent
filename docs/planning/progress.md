@@ -1,5 +1,91 @@
 # Progress Log
 
+## Session 2026-08-05 (cont.) — every screen seen at last, and two blockers found
+
+**All five screens render correctly with real data.** Dashboard, Imports,
+Review, Certificates, Portfolio (plus the inline ownership editor) — the first
+time anything beyond sign-in has been looked at in a browser. Screenshots
+taken of each.
+
+**But the app cannot work as shipped.** Two blockers, both of which the entire
+472-test suite is structurally incapable of catching, because every API test
+runs in-process over `ASGITransport` — no browser, no origin, no preflight —
+and mints its own HS256 token instead of using one Supabase issued.
+
+### Blocker 1: every real token is rejected — ES256 vs HS256
+
+The local Supabase stack now issues **ES256** access tokens:
+
+```
+header: {"alg":"ES256","kid":"b81269f1-…","typ":"JWT"}
+JWKS:   [{"alg":"ES256","kty":"EC"}]
+```
+
+`src/api/auth.py` has `_ALGORITHMS = ["HS256"]`. Proved end to end:
+
+```
+GET /entities  with a real Supabase token  -> 401
+  {"detail":"Invalid bearer token: The specified alg value is not allowed"}
+GET /entities  with a hand-minted HS256    -> 200
+```
+
+**This is the cloud cut-over blocker recorded on 2026-08-03, arrived early on
+the local stack** — presumably a CLI/GoTrue default flipping to asymmetric
+signing keys. It was filed as a future problem; it is a present one. The
+options are unchanged: verify asymmetrically against JWKS (correct, needs key
+fetch + cache + rotation that does not fail open), or pin the local stack back
+to a symmetric key — `supabase/config.toml` line 178 has a commented-out
+`signing_keys_path`.
+
+### Blocker 2: the API sends no CORS headers at all
+
+```
+OPTIONS /dashboard  (Origin: http://127.0.0.1:3000)  -> 405 Method Not Allowed
+GET /health         (Origin: http://127.0.0.1:3000)  -> no access-control-* headers
+```
+
+There is no `CORSMiddleware` on the app, so a browser blocks every response
+before the Flutter code sees it. The first screenshot of the dashboard showed
+exactly this: `ClientException: Failed to fetch` with no status code.
+
+### How the screens were seen anyway
+
+A throwaway CORS proxy on :8001, the app rebuilt to point at it, and a session
+injected through the OAuth implicit-flow fragment carrying a hand-minted HS256
+token. **None of that is a fix**, and the proxy lives in a scratchpad, not the
+repo. It separates "is the UI right?" (yes) from "can the app run?" (not yet).
+
+Data was real throughout: a real org, a real import parsed by `core/parser`,
+and **the real model** — `glm-5.2:cloud` categorised all six lines correctly
+with confidences 0.55–0.95, which is what made the review screen's sort order
+and its below-0.8 "check this" treatment visible.
+
+### What the screens showed
+
+- **Dashboard** — attention list, not cards. Deadline computed right ("due on
+  7 August, in 2 days"). Only the lapsed certificate carries colour.
+- **Review** — proposal leads, bank text beneath; rows sorted ascending by
+  confidence; the four below 0.8 lighter and flagged; money never coloured by
+  sign; U+2212 minus; tabular figures aligned.
+- **Certificates** — grouped by property, all three states.
+- **Portfolio** — entities with regime, properties, inline ownership editor
+  with the live total.
+
+Two cosmetic bugs, both small:
+
+1. **`Epc` and `Eicr`** in certificate rows — the enum value is title-cased
+   instead of being shown as an acronym. The page subtitle gets it right
+   ("Gas safety, EICR, EPC and licences"), so the two disagree on the same
+   screen.
+2. The imports screen shows an import as `Imported` whether or not
+   categorisation has finished — the known missing `categorised` value in
+   `import_status`, now seen rather than reasoned about.
+
+**Correction to something I said mid-verification:** I claimed a deep link to
+`/imports` 404ing meant the app needed SPA fallback from its host. Wrong — the
+app uses **hash** routing (`#/imports`), so deep links work and no host
+rewriting is needed. I had used the wrong URL form.
+
 ## Session 2026-08-05 — GitHub, CI, and a history rewrite
 
 **Private repo `hoquem/landlord-compliance-agent`**, `master` as default,
