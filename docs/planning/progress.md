@@ -1,5 +1,59 @@
 # Progress Log
 
+## Session 2026-08-05 — GitHub, CI, and a history rewrite
+
+**Private repo `hoquem/landlord-compliance-agent`**, `master` as default,
+114 commits fast-forwarded from `iteration-1-mvp`. **CI green on the first
+push**: `fast` (ruff + 182 env-free tests), `flutter` (analyze + 104), and
+`integration` (a real Supabase stack, 472 tests, then 472 again in reversed
+directory order).
+
+The fast job asserts its *collected* count before running. `pytest` exits
+non-zero on "collected nothing" but zero on "collected fewer than expected",
+and the second is the failure that would go unnoticed in a repo where a bare
+`pytest` runs zero tests by design. A floor of 170, not an exact number,
+because a check that fails whenever a test is added gets deleted. It caught a
+stale figure immediately: the README said 173; it is 182.
+
+### The private data, and the rewrite
+
+The repo was pushed unredacted on an explicit decision, then cleaned the same
+day on a second one. What a full scan of 116 commits found — **wider than the
+one document everybody expected**:
+
+| where | what |
+|---|---|
+| `docs/planning/bank-formats.md` | twelve addresses + postcodes, owning companies, a home address flagged as such, a third party's name, two balances, a sort code + account number, a foreign account reference |
+| `tests/fixtures/statements/nationwide.csv` | **real balances**, £10,737.98 ×2 and £8,433.64 |
+| `tests/core/test_parser.py` | the same balance, hard-coded ×2 |
+| `evals/golden_set.jsonl`, `tests/flows/`, `tests/evals/` | a real home address as a property label |
+| `tests/api/`, `tests/core/` | a real company name as a test entity |
+| `DESIGN.md`, four Flutter test files | a real street and a real letting agent's name |
+
+**I had told Mahmud the fixtures were sanitised. They were not.** I checked
+Barclays, found it properly faked, and generalised to the rest. Nationwide was
+never sanitised, and my grep missed it a second time because the file is
+`iso-8859-1` and I searched for a UTF-8 pound sign. Two different failures of
+the same kind: checking one instance and reporting on the class.
+
+Cleaned with `git filter-repo` — the doc removed from every commit, ten string
+replacements applied across all history — then verified by searching **all**
+commits for 32 terms, not just `HEAD`. Zero hits. Suites re-run after the
+rewrite: 472 backend, 104 Flutter, ruff and analyze clean. A pre-clean bundle
+is in `~/backups/` so nothing is lost off the machine.
+
+`bank-formats.md` was re-added redacted rather than dropped: the format quirks
+are what the parser was built from, and the README points at them.
+
+### What the rewrite does NOT do
+
+**Force-pushing does not remove anything from GitHub.** The old commits stay
+reachable by SHA through the web UI and API until GitHub garbage-collects,
+which needs a Support request. Mahmud chose force-push over delete-and-recreate
+knowing this. Until that request is made and answered, treat the original data
+as still retrievable by anyone who has, or can guess, a pre-rewrite commit SHA
+— which for a private repo means anyone with access to it.
+
 ## Session 2026-08-04 (cont.) — the categoriser works, and has a real number
 
 **85.00% category accuracy (17/20)** on the golden set against
