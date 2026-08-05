@@ -131,6 +131,10 @@ jobs:
             echo "SUPABASE_ANON_KEY=$ANON_KEY"
             echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
             echo "SUPABASE_JWT_SECRET=$JWT_SECRET"
+            # Not from the stack -- it is our own config, and importing the
+            # app raises without it. The value has to match what
+            # tests/api/test_cors.py treats as the app's origin.
+            echo "CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000"
           } >> "$GITHUB_ENV"
 
       - name: Full suite

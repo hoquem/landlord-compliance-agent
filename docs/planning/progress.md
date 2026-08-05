@@ -1,5 +1,44 @@
 # Progress Log
 
+## Session 2026-08-05 (cont.) — CORS, and one blocker down
+
+**The Flutter app now talks to the API for real, with no proxy.** Verified in
+a browser: the dashboard renders live data, including the two new import
+sentences. That is one of the two production blockers closed.
+
+`CORSMiddleware` with an allowlist from `CORS_ALLOWED_ORIGINS`. Required, no
+default, and `*` is refused outright — which origins may read a tax ledger is
+a deployment decision, and any default is wrong in one of two silent
+directions: permissive enough to leak, or localhost-only and baffling in
+production. `allow_credentials=False`, because this API authenticates by
+header and never by cookie; inviting ambient credentials is the ingredient
+CSRF wants.
+
+**`tests/api/test_cors.py` is the only place in the suite where a browser's
+rules apply.** Every other API test goes through `ASGITransport` with no
+`Origin` header, so nothing ever triggered a preflight — which is exactly how
+the API shipped with no CORS at all while the suite stayed green. Starlette's
+middleware runs in the ASGI stack, so sending an `Origin` through
+`ASGITransport` exercises it for real; the browser is not simulated, the
+middleware that answers the browser is.
+
+Seven tests: preflight accepted for the app origin, the real response
+released, a stranger origin given nothing, credentials not invited, unset
+config refused, the list split and trimmed, and `*` refused.
+
+**A wire-shape change bit during verification, exactly as designed.** The
+served bundle predated the `unreadable_imports` split, so the browser fetched
+the response fine and then failed parsing it: `TypeError: null: type
+'minified:u1' is not a subtype of type 'int'`. Worth noting because the
+failure was *loud and immediate* rather than a silently-missing count — and
+because "Failed to fetch with no status" versus "TypeError after a successful
+fetch" is how you tell a CORS problem from a schema one.
+
+Still open: **ES256**. Real Supabase tokens are still rejected, so the browser
+session used here is a hand-minted HS256 one. That is the last thing between
+this and a real quarter.
+
+
 ## Session 2026-08-05 (cont.) — a mock quarter, and what looking at it found
 
 Ran a realistic quarter end to end: 20 lines, 3 properties, 3 entities, one
