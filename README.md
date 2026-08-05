@@ -128,18 +128,25 @@ rule that has caught more real defects here than anything else.
 stubbed** and checks the exported figures penny-exact, read back through the
 signed-download path.
 
-### CI, when someone adds it
+### CI
 
-There is no `.github/` yet. Whoever adds one must not simply run `pytest`: as
-above, a bare run executes **zero** tests because import-time environment
-checks abort collection. Two workable shapes:
+`.github/workflows/ci.yml`, three jobs, on push to `master` and on every PR.
 
-- start the Supabase stack in the job, then run the full suite; or
-- split into an env-free fast job (`pytest tests/core tests/flows tests/evals`
-  — 173 tests, verified green in isolation with `DATABASE_URL` and
-  `SUPABASE_JWT_SECRET` unset) plus an integration job that starts the stack.
+The split is **not** about speed. As above, a bare `pytest` executes **zero**
+tests because import-time environment checks abort collection — so a naive job
+can go green having run nothing. Hence:
 
-The live golden eval must not be in either: it calls a real model.
+- **fast** — ruff, then `pytest tests/core tests/flows tests/evals` with no
+  environment set at all (182 tests). It first asserts the *collected* count
+  is at least 170: `pytest` exits non-zero on "collected nothing" but zero on
+  "collected fewer than expected", which is the failure that would go unnoticed.
+- **flutter** — `flutter analyze` and `flutter test`, from `frontend/`
+  (`bootstrap_test.dart` opens files by relative path).
+- **integration** — starts a real Supabase stack, then runs the full suite in
+  **both** directory orderings, because `pytest tests/db tests/api` once passed
+  by ordering luck.
+
+The live golden eval is deliberately absent: it calls a real model.
 
 ## Adding a bank format
 

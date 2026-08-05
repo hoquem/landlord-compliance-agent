@@ -1,0 +1,153 @@
+# Continuous integration.
+#
+# **The split into `fast` and `integration` is not about speed.** A bare
+# `pytest` in this repo runs ZERO tests: `src/api/auth.py` and
+# `src/db/models.py` raise at *import* when their environment is missing, and
+# a collection error aborts the whole run. That is deliberate fail-loudly
+# design, not a bug -- but it means a naive CI job can go green having
+# executed nothing at all. So `fast` runs exactly the directories that need no
+# environment, and asserts how many it collected; `integration` starts a real
+# Supabase stack and runs everything.
+#
+# The live golden eval is deliberately absent. It calls a real model, costs
+# money per run, and README.md says it stays manual or nightly.
+#
+# :seealso: README.md "Testing"; ENGINEERING.md for the both-orderings rule.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fast:
+    name: Fast (no database)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync
+
+      - name: Lint
+        working-directory: backend
+        run: uv run ruff check src tests evals
+
+      # The actual hazard this job exists for. `pytest` exits 5 on "collected
+      # nothing", but it exits 0 on "collected some" -- so a directory that
+      # silently stopped being importable would still go green with a smaller
+      # number. A floor catches that; an exact count would fail every time a
+      # test is added, which is how a check gets deleted.
+      - name: Refuse a suspiciously small collection
+        working-directory: backend
+        run: |
+          collected=$(uv run pytest tests/core tests/flows tests/evals \
+            --collect-only -q | tail -1 | grep -oE '^[0-9]+')
+          echo "collected ${collected:-0} env-free tests"
+          if [ "${collected:-0}" -lt 170 ]; then
+            echo "::error::expected at least 170 env-free tests, collected ${collected:-0}"
+            exit 1
+          fi
+
+      - name: Test (no environment set, on purpose)
+        working-directory: backend
+        run: uv run pytest tests/core tests/flows tests/evals -q
+
+  flutter:
+    name: Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.32.5
+          channel: stable
+
+      # `working-directory` on every step, not just for tidiness:
+      # `test/bootstrap_test.dart` opens `web/flutter_bootstrap.js` and the
+      # vendored fallback font by relative path, so from the repo root those
+      # three tests fail on a missing file rather than on anything real.
+      - name: Install dependencies
+        working-directory: frontend
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: frontend
+        run: flutter analyze
+
+      - name: Test
+        working-directory: frontend
+        run: flutter test
+
+  integration:
+    name: Integration (Supabase stack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # WeasyPrint dlopens these; importing it -- and therefore the whole API
+      # -- raises OSError without them. The macOS equivalent is
+      # DYLD_FALLBACK_LIBRARY_PATH in .env, which Linux does not need.
+      - name: WeasyPrint's shared libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.110.0
+
+      # `[auth.external.google]` is `enabled = true` with `env()` substitution,
+      # and the CLI refuses to start if either value is empty. Placeholders are
+      # enough: verified locally that the stack boots with them, and nothing in
+      # the suite exercises Google sign-in -- every test mints its own JWT with
+      # the shared secret.
+      - name: Start Supabase
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ci-placeholder
+          GOOGLE_OAUTH_CLIENT_SECRET: ci-placeholder
+        run: supabase start
+
+      # The stack's credentials are generated, so there is no `.env` to copy --
+      # `.env` is gitignored and must stay that way. `-o env` emits quoted
+      # `KEY="value"` pairs, hence sourcing rather than parsing.
+      - name: Export the stack's credentials
+        run: |
+          supabase status -o env > /tmp/supabase.env
+          set -a; . /tmp/supabase.env; set +a
+          {
+            echo "DATABASE_URL=$DB_URL"
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+            echo "SUPABASE_JWT_SECRET=$JWT_SECRET"
+          } >> "$GITHUB_ENV"
+
+      - name: Full suite
+        working-directory: backend
+        run: uv run pytest -q
+
+      # ENGINEERING.md: both directory orderings must pass. `pytest tests/db
+      # tests/api` once passed by ordering luck -- a module-level engine was
+      # never disposed, leaving connections bound to a closed event loop, and
+      # the command only survived because the first API test collected happened
+      # to 401 before touching the database.
+      #
+      # Spelled out in full rather than globbed: a directory added later would
+      # silently drop out of a glob, and this check would stop checking the one
+      # thing it is for.
+      - name: Full suite, reversed directory order
+        working-directory: backend
+        run: |
+          uv run pytest tests/e2e tests/api tests/worker tests/db \
+            tests/core tests/flows tests/evals tests/test_health.py -q
