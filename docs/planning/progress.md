@@ -1,5 +1,62 @@
 # Progress Log
 
+## Session 2026-08-05 (cont.) — a mock quarter, and what looking at it found
+
+Ran a realistic quarter end to end: 20 lines, 3 properties, 3 entities, one
+60/40 split, ~£8k of movement. **Every guard held and every figure matched
+hand-computation** — the 60/40 rent came out 4900.01 / 2000.00 with the odd
+penny on the majority owner, the £45 refund reduced repairs to 237.43 rather
+than adding to income, £96.30 of personal spending appeared on no return, and
+the export refused while lines were unreviewed, naming all 20 ids. Changed
+history was caught with a 409 quoting the filed and recomputed figures.
+
+**An unplanned scenario arrived: the model hit its usage cap mid-run.** Ollama
+answered 429. The job was recorded `failed` with the provider's own message,
+the import flagged `categorisation_failed`, and all 20 lines stayed
+`unclassified`. Nothing half-written, no retry. That is the failure mode
+worth having.
+
+### Four UI bugs, three fixed
+
+All found by looking at the screen, none by 576 tests, and **one was pinned by
+a passing test** — `certificates_screen_test` asserted `find.text('Eicr')`, so
+the suite stayed green while the screen read "Eicr" under a subtitle reading
+"EICR". A test is only as right as the expectation someone wrote into it.
+
+1. **"check this" survived confirmation.** Gated on confidence, which never
+   changes, so settled rows kept instructing a user to check work they had
+   just done. Now gated on `!settled` too.
+2. **"2 imports could not be read"** when one had been read perfectly and the
+   *model* had fallen over. Split into `unreadable_imports` and
+   `uncategorised_imports` — different problems, different fixes, and merging
+   them buried the one whose data is fine and waiting.
+3. **"Epc" / "Eicr"**. `categoryLabel` still derives rather than looks up (a
+   map is a second list of categories, and drift there is a blank cell in a
+   tax document); the acronym set is a spelling rule about three words.
+4. **Not fixed:** imports read `Imported` regardless of categorisation state.
+   Not a copy bug — `import_status` has no `categorised` value, so the screen
+   cannot tell. The fix is a schema value, not a different word.
+
+### The review-screen honesty question, and a claim I got wrong
+
+I reported that "batch confirm makes rubber-stamping the path of least
+resistance", having cleared 19 lines in one request. **That request was mine,
+straight to `POST /transactions/confirm-batch` from a script.** The UI has no
+select-all: confirming 19 lines costs 19 individual toggles. The concern was
+real but weaker than I stated, and the proposed fix — excluding uncertain
+lines from select-all — was for a control that does not exist.
+
+What did survive scrutiny: the button said `Confirm 19` while saying nothing
+about the five proposals the agent itself had flagged. Mahmud chose to make
+the choice visible rather than add a barrier. The button now reads
+`Confirm 19 · 5 uncertain`, and says nothing extra when there is nothing to
+say, so the warning stays rare enough to mean something.
+
+Reading that code turned up a second honesty bug in the same widget: the
+count came from `_selected`, but a line with no category is selectable and
+then silently dropped from `_confirmable`. Select an uncategorised row and
+the button promised work it would not do. It now counts the confirmable set.
+
 ## Session 2026-08-05 (cont.) — every screen seen at last, and two blockers found
 
 **All five screens render correctly with real data.** Dashboard, Imports,

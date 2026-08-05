@@ -100,6 +100,26 @@ class _ReviewScreenState extends State<ReviewScreen> {
         ),
   ];
 
+  /// Selected, confirmable lines the agent itself was unsure about.
+  ///
+  /// Surfaced on the button because this is where the product's promise is
+  /// thinnest. `PRODUCT.md`: *"Refusing is a feature, so make refusal feel
+  /// like protection."* Refusal is enforced at **export** -- an unreviewed
+  /// line stops the return outright -- but at **review** nothing costs you
+  /// anything for accepting a proposal without reading it. This does not add
+  /// a barrier; it makes the choice visible, so skipping is something you
+  /// did rather than something you did not notice.
+  ///
+  /// Pinned by `the button says how many uncertain proposals it accepts`.
+  int get _uncertainSelected => <Txn>[
+    for (final Txn txn in _txns ?? <Txn>[])
+      if (_selected.contains(txn.id) &&
+          _categoryFor(txn) != null &&
+          txn.confidence != null &&
+          txn.confidence! < kLowConfidence)
+        txn,
+  ].length;
+
   Future<void> _confirmSelected() async {
     final List<ConfirmItem> items = _confirmable;
     if (items.isEmpty) return;
@@ -137,14 +157,19 @@ class _ReviewScreenState extends State<ReviewScreen> {
       subtitle: outstanding == 0
           ? 'Nothing is waiting on a decision.'
           : '$outstanding ${outstanding == 1 ? 'line needs' : 'lines need'} a decision.',
-      action: _selected.isEmpty
+      // Keyed on what is *confirmable*, not on what is selected. A line with
+      // no category yet is selectable but gets dropped on the way out, so
+      // counting the selection made the button promise work it would not do.
+      // Pinned by `the button counts what it will actually confirm`.
+      action: _confirmable.isEmpty
           ? null
           : FilledButton(
               onPressed: _busy ? null : _confirmSelected,
               child: Text(
                 _busy
                     ? 'Confirming'
-                    : 'Confirm ${_selected.length}',
+                    : 'Confirm ${_confirmable.length}'
+                          '${_uncertainSelected > 0 ? ' · $_uncertainSelected uncertain' : ''}',
               ),
             ),
       child: ListView(

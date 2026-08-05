@@ -215,6 +215,63 @@ void main() {
   });
 
   group('Confirming', () {
+    testWidgets('the button counts what it will actually confirm', (
+      tester,
+    ) async {
+      // A line with no category is selectable but not confirmable -- it is
+      // dropped silently on the way out. Counting the selection rather than
+      // the confirmable set made the button promise work it would not do.
+      final FakeApiClient api = FakeApiClient()
+        ..txns = <Txn>[
+          aTxn(id: 'a', category: 'rent_income', confidence: 0.95),
+          aTxn(id: 'b', category: null, confidence: null, status: 'unclassified'),
+        ];
+
+      await pumpReview(tester, api);
+      await tester.tap(find.byType(Checkbox).at(0));
+      await tester.tap(find.byType(Checkbox).at(1));
+      await tester.pump();
+
+      expect(find.text('Confirm 1'), findsOneWidget);
+    });
+
+    testWidgets('the button says how many uncertain proposals it accepts', (
+      tester,
+    ) async {
+      // PRODUCT.md: "Refusing is a feature, so make refusal feel like
+      // protection." Refusal is enforced at export; at review, accepting a
+      // proposal the agent itself flagged should at least be a thing you
+      // notice you are doing.
+      final FakeApiClient api = FakeApiClient()
+        ..txns = <Txn>[
+          aTxn(id: 'a', category: 'rent_income', confidence: 0.95),
+          aTxn(id: 'b', category: 'repairs_maintenance', confidence: 0.55),
+          aTxn(id: 'c', category: 'legal_professional', confidence: 0.62),
+        ];
+
+      await pumpReview(tester, api);
+      for (int i = 0; i < 3; i++) {
+        await tester.tap(find.byType(Checkbox).at(i));
+      }
+      await tester.pump();
+
+      expect(find.text('Confirm 3 · 2 uncertain'), findsOneWidget);
+    });
+
+    testWidgets('a confident-only selection says nothing extra', (tester) async {
+      // No noise when there is nothing to say; the warning has to stay rare
+      // enough to keep meaning something.
+      final FakeApiClient api = FakeApiClient()
+        ..txns = <Txn>[aTxn(id: 'a', category: 'rent_income', confidence: 0.95)];
+
+      await pumpReview(tester, api);
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pump();
+
+      expect(find.text('Confirm 1'), findsOneWidget);
+      expect(find.textContaining('uncertain'), findsNothing);
+    });
+
     testWidgets('a batch confirm is one call, not one per row', (tester) async {
       // Row-by-row would look identical on screen while hammering the API
       // and throwing away the backend's all-or-nothing guarantee.
