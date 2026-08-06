@@ -34,6 +34,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
+import asyncpg
 import httpx
 import pytest
 
@@ -701,3 +702,115 @@ async def test_a_property_with_no_ownership_at_all_is_refused(org_user: OrgUser)
     assert resp.status_code == 422, resp.text
     assert property_id in resp.text
     assert await rows("mtd_quarters", org_user.org_id) == []
+
+
+# ---------------------------------------------------------------------------
+# Repayment mortgages: the interest is allowable, the capital is not.
+#
+# Found on Mahmud's first real quarter, 2026-08-06. The account he happened to
+# pick was interest-only so its figures were right; others are not. Nothing in
+# the pipeline noticed, because the proposed *category* is correct and only the
+# amount is wrong -- which is why the refusal lives at export.
+# ---------------------------------------------------------------------------
+async def mark_repayment(property_id: str) -> None:
+    """Flag a property's borrowing as a repayment mortgage."""
+    async with db() as conn:
+        await conn.execute(
+            "update properties set mortgage_type = 'repayment' where id = $1",
+            uuid.UUID(property_id),
+        )
+
+
+async def test_an_unsplit_repayment_mortgage_payment_blocks_the_export(
+    org_user: OrgUser,
+) -> None:
+    """A wrong number becomes a refusal, and the refusal names the line."""
+    entity_id = await make_entity(org_user)
+    property_id = await make_property_owned_by(org_user, entity_id)
+    await mark_repayment(property_id)
+    txn_id = await seed_transaction(
+        org_user, entity_id=entity_id, property_id=property_id,
+        category="finance_costs_residential", amount="1250.00", direction="out",
+    )
+
+    resp = await export(org_user, entity_id)
+
+    assert resp.status_code == 422, resp.text
+    assert txn_id in resp.json()["detail"]
+    assert "interest" in resp.json()["detail"]
+
+
+async def test_recording_the_interest_lets_the_export_through(
+    org_user: OrgUser,
+) -> None:
+    """And only the interest reaches the figures."""
+    entity_id = await make_entity(org_user)
+    property_id = await make_property_owned_by(org_user, entity_id)
+    await mark_repayment(property_id)
+    txn_id = await seed_transaction(
+        org_user, entity_id=entity_id, property_id=property_id,
+        category="finance_costs_residential", amount="1250.00", direction="out",
+    )
+    resp = await as_user(
+        org_user, "POST", f"/transactions/{txn_id}/confirm",
+        {
+            "hmrc_category": "finance_costs_residential",
+            "property_id": property_id,
+            "allowable_amount": "412.55",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await export(org_user, entity_id)
+
+    assert resp.status_code == 201, resp.text
+    async with db() as conn:
+        filed = await conn.fetchval(
+            "select finance_costs_residential_total from mtd_quarters where entity_id = $1",
+            uuid.UUID(entity_id),
+        )
+    assert filed == Decimal("412.55"), "the capital portion must not be an expense"
+
+
+async def test_marking_the_mortgage_repayment_after_confirming_still_blocks(
+    org_user: OrgUser,
+) -> None:
+    """**Why the guard is at export and not at confirmation.**
+
+    Confirming the line while the property looked interest-only, then
+    correcting the property, is exactly the ordering a confirm-time check
+    would miss -- and it is the likely real sequence, because you notice the
+    mortgage type when the figures look wrong.
+    """
+    entity_id = await make_entity(org_user)
+    property_id = await make_property_owned_by(org_user, entity_id)
+    await seed_transaction(
+        org_user, entity_id=entity_id, property_id=property_id,
+        category="finance_costs_residential", amount="1250.00", direction="out",
+    )
+    assert (await export(org_user, entity_id)).status_code == 201
+
+    await mark_repayment(property_id)
+
+    assert (await export(org_user, entity_id)).status_code == 422
+
+
+async def test_an_allowable_amount_above_the_payment_is_refused(
+    org_user: OrgUser,
+) -> None:
+    """The database CHECK is the authority: only the row knows its own amount."""
+    entity_id = await make_entity(org_user)
+    property_id = await make_property_owned_by(org_user, entity_id)
+    txn_id = await seed_transaction(
+        org_user, entity_id=entity_id, property_id=property_id,
+        category="finance_costs_residential", amount="100.00", direction="out",
+    )
+
+    # The specific violation, not any error: a blind `Exception` here would
+    # also pass on a typo'd column name and prove nothing about the CHECK.
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        async with db() as conn:
+            await conn.execute(
+                "update transactions set allowable_amount = 200.00 where id = $1",
+                uuid.UUID(txn_id),
+            )

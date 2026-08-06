@@ -41,7 +41,7 @@ import csv
 import datetime
 import io
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
@@ -105,6 +105,12 @@ class TxnRow:
     :ivar id: the transaction's id, reported when it blocks an export.
     :ivar date: transaction date.
     :ivar amount: magnitude, always positive.
+    :ivar allowable_amount: the portion of ``amount`` that is an allowable
+        expense, or ``None`` for all of it. Set on a repayment-mortgage
+        payment to record the interest, the rest being capital and not
+        deductible. **A magnitude, like ``amount``** -- signed by the same
+        category-aware rule and apportioned by the same ownership split, so
+        a refund against a finance cost still reduces the expense.
     :ivar direction: ``in`` or ``out``.
     :ivar hmrc_category: the confirmed category, or ``None`` if unreviewed
         or excluded.
@@ -123,6 +129,9 @@ class TxnRow:
     status: str
     entity_id: uuid.UUID
     property_id: uuid.UUID | None
+    #: Last because it is the only optional one; every existing caller
+    #: constructs by keyword anyway.
+    allowable_amount: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +279,116 @@ def _property_breakdown(
     return out
 
 
+#: Categories where a payment can contain non-deductible capital. Only
+#: borrowing does: a repayment mortgage's direct debit is part interest, part
+#: loan principal, and only the interest is allowable.
+FINANCE_COST_CATEGORIES = frozenset(
+    {HmrcCategory.FINANCE_COSTS_RESIDENTIAL, HmrcCategory.FINANCE_COSTS_NONRESIDENTIAL}
+)
+
+
+class MortgageSplitRequiredError(Exception):
+    """Raised when a repayment-mortgage payment has not been split.
+
+    A repayment mortgage arrives as one direct debit and only the interest is
+    an allowable finance cost. Counting the whole payment overstates costs and
+    understates profit -- silently, and at high confidence, because the
+    category *is* right and only the amount is wrong.
+
+    **Refusing is the only honest response**, because nothing else in the
+    system can know the answer: the bank line does not carry it, the parser
+    cannot derive it, and a stored ratio would be wrong every month as the
+    balance amortises. The figure has to come from the lender's statement,
+    which means from a human.
+
+    :ivar blockers: ids of the payments needing an interest figure, so the
+        user is told *which* lines rather than merely that something is wrong.
+    """
+
+    def __init__(self, blockers: list[uuid.UUID]) -> None:
+        self.blockers = blockers
+        super().__init__(
+            f"{len(blockers)} finance-cost payment(s) sit on a property with a "
+            f"repayment mortgage and have no interest amount recorded, so only "
+            f"part of each is allowable: {', '.join(str(b) for b in blockers)}"
+        )
+
+
+def assert_mortgage_interest_separated(
+    *,
+    transactions: Sequence[TxnRow],
+    window: tuple[datetime.date, datetime.date],
+    repayment_properties: Container[uuid.UUID],
+) -> None:
+    """Refuse to export a repayment-mortgage payment that was never split.
+
+    **Checked at export rather than at confirmation**, and that is the whole
+    design. A line can be confirmed perfectly reasonably and the property
+    marked ``repayment`` afterwards; a confirm-time check would miss exactly
+    that ordering and leave the guard decorative. Pinned by
+    ``test_marking_the_mortgage_repayment_after_confirming_still_blocks``.
+
+    **A known hole, stated rather than hidden:** a finance cost with no
+    ``property_id`` cannot be checked, because there is no property whose
+    mortgage type to consult. Such a row is rare -- borrowing is inherently
+    per-property -- but it is unguarded, and
+    ``test_a_finance_cost_with_no_property_is_not_checked`` records that.
+
+    :param transactions: candidate rows, as passed to :func:`build_export_pack`.
+    :param window: the year-to-date period being exported.
+    :param repayment_properties: ids of properties whose borrowing is a
+        repayment mortgage. Only membership is used, so any container will
+        do -- but pass a set, because this runs once per candidate row.
+    :raises MortgageSplitRequiredError: naming every unsplit payment.
+    """
+    start, end = window
+    blockers = [
+        txn.id
+        for txn in transactions
+        if txn.status == "confirmed"
+        and start <= txn.date <= end
+        and txn.hmrc_category in FINANCE_COST_CATEGORIES
+        and txn.property_id in repayment_properties
+        and txn.allowable_amount is None
+    ]
+    if blockers:
+        raise MortgageSplitRequiredError(blockers)
+
+
+def _for_totals(transactions: Sequence[TxnRow]) -> list[TxnForTotals]:
+    """Convert database rows into the pure record :mod:`src.core.quarters` totals.
+
+    **The one place ``allowable_amount`` is applied**, deliberately. Doing it
+    here means the substitution happens *before* signing and *before*
+    ownership apportionment, so a jointly-owned repayment mortgage splits the
+    interest rather than the payment -- and no downstream code has to know the
+    field exists. Pinned by
+    ``test_the_interest_is_apportioned_by_ownership_not_the_payment``.
+
+    Only confirmed rows carry a category, and only they reach the totals.
+    Excluded rows are a decision the user already made, so they are dropped
+    rather than treated as missing.
+
+    :param transactions: candidate rows.
+    :returns: one :class:`~src.core.quarters.TxnForTotals` per confirmed row.
+    """
+    return [
+        TxnForTotals(
+            date=txn.date,
+            amount=signed_amount(
+                txn.amount if txn.allowable_amount is None else txn.allowable_amount,
+                txn.direction,
+                txn.hmrc_category,
+            ),
+            hmrc_category=txn.hmrc_category,
+            entity_id=txn.entity_id,
+            property_id=txn.property_id,
+        )
+        for txn in transactions
+        if txn.status == "confirmed" and txn.hmrc_category is not None
+    ]
+
+
 def build_export_pack(
     entity: ExportEntity,
     *,
@@ -310,17 +429,7 @@ def build_export_pack(
     # Only confirmed rows carry a category, and only they reach the totals.
     # Excluded rows are a decision the user already made, so they are
     # dropped rather than treated as missing.
-    for_totals = [
-        TxnForTotals(
-            date=txn.date,
-            amount=signed_amount(txn.amount, txn.direction, txn.hmrc_category),
-            hmrc_category=txn.hmrc_category,
-            entity_id=txn.entity_id,
-            property_id=txn.property_id,
-        )
-        for txn in transactions
-        if txn.status == "confirmed" and txn.hmrc_category is not None
-    ]
+    for_totals = _for_totals(transactions)
 
     totals = cumulative_totals(for_totals, entity.id, tax_year, quarter, ownerships)
 
@@ -487,17 +596,7 @@ def assert_history_intact(
     :raises CumulativeDecreaseError: naming the first quarter, category,
         filed total and recomputed total that disagree.
     """
-    confirmed = [
-        TxnForTotals(
-            date=txn.date,
-            amount=signed_amount(txn.amount, txn.direction, txn.hmrc_category),
-            hmrc_category=txn.hmrc_category,
-            entity_id=txn.entity_id,
-            property_id=txn.property_id,
-        )
-        for txn in transactions
-        if txn.status == "confirmed" and txn.hmrc_category is not None
-    ]
+    confirmed = _for_totals(transactions)
 
     for earlier in sorted(q for q in stored_by_quarter if q < quarter):
         recomputed = cumulative_totals(confirmed, entity_id, tax_year, earlier, ownerships)

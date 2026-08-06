@@ -1,5 +1,70 @@
 # Progress Log
 
+## Session 2026-08-06 (cont.) — the mortgage split
+
+**A repayment-mortgage payment can no longer be silently counted in full.**
+508 backend tests, 113 Flutter, ruff and analyze clean.
+
+Verified against the real quarter: marking 59 Sample Rise `repayment` (a
+counterfactual — it is genuinely interest-only) turned the export into a 422
+naming all **9** payments. Set back to the truth, the figures are unchanged.
+So the guard would have caught the case Mahmud confirmed exists on his other
+accounts, and does nothing to the one it shouldn't.
+
+### The shape
+
+Two columns, and the pairing is the point. `properties.mortgage_type` says a
+payment *needs* splitting; `transactions.allowable_amount` says what the split
+*is*. Neither alone is enough.
+
+`mortgage_type` is a three-valued enum, not a boolean: "no borrowing" is not
+the same claim as "borrowing where the whole payment is interest", and a
+boolean would force one of them to be a lie. It defaults to `none`, so the
+migration changes no existing figure — a property opts in and only then does
+anything start refusing.
+
+**Deliberately not built: a stored interest ratio.** It looks tidy and is the
+trap. On a repayment mortgage the interest falls every month as the balance
+amortises, so a fixed ratio produces confidently wrong numbers all year — the
+exact failure this guard exists to prevent, wearing a nicer hat. The figure
+has to come from the lender's statement, which means from a human.
+
+### Three decisions worth recording
+
+**`allowable_amount` is a magnitude, like `amount`.** It goes through
+`signed_amount()` identically, so a refund of overpaid interest still reduces
+the expense rather than becoming income. Storing it pre-signed would have been
+silently wrong in the one direction nobody checks by hand.
+
+**Substituted once, at the boundary into `TxnForTotals`** — before signing and
+before ownership apportionment. That means a jointly-owned repayment mortgage
+splits the *interest*, not the payment, and no downstream code needs to know
+the field exists. The mutation that proves it: substituting after
+apportionment instead, which kills three tests.
+
+**The guard is at export, not at confirmation**, and that is the whole design.
+A line can be confirmed while the property looks interest-only and the
+property corrected afterwards — which is the *likely* real sequence, because
+you notice the mortgage type when the figures look wrong. A confirm-time check
+would miss exactly that ordering and be decorative. Pinned by
+`test_marking_the_mortgage_repayment_after_confirming_still_blocks`.
+
+### A hole, stated rather than hidden
+
+A finance cost with **no `property_id`** cannot be checked — there is no
+property whose mortgage type to consult. Borrowing is inherently
+per-property so it should be rare, but it is unguarded, and
+`test_a_finance_cost_with_no_property_is_not_checked` is where that decision
+was made rather than overlooked.
+
+### Not done
+
+The review screen has no way to enter the interest figure. The API accepts it
+on `POST /transactions/{id}/confirm`, and the export refuses without it, so
+the app is not stranded — but a user cannot currently resolve the refusal from
+the UI. That is the next commit, not a surprise.
+
+
 ## Session 2026-08-06 (cont.) — one real quarter, and the bug it found
 
 **The validation gate is passed.** A real Starling export, real money, real

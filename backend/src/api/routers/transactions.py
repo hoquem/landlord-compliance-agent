@@ -68,6 +68,7 @@ class TransactionRead(BaseModel):
     description: str
     hmrc_category: HmrcCategory | None
     status: TransactionStatus
+    allowable_amount: Decimal | None
     confidence: Decimal | None
     proposed_by: str | None
     created_at: datetime.datetime
@@ -83,6 +84,13 @@ class ConfirmBody(BaseModel):
     #: Optional because not every allowable cost belongs to one property --
     #: ``use_of_home_allowance`` is the standing example.
     property_id: uuid.UUID | None = None
+    #: The portion of the payment that is actually allowable, for a repayment
+    #: mortgage: the interest, the rest being capital and not deductible.
+    #: ``None`` means the whole amount, which is the ordinary case.
+    #:
+    #: Bounded at zero here; that it cannot exceed the transaction's amount is
+    #: enforced by the database CHECK, because only the row knows the amount.
+    allowable_amount: Decimal | None = Field(default=None, ge=0, decimal_places=2)
 
 
 class BatchItem(ConfirmBody):
@@ -162,6 +170,7 @@ async def _apply_confirm(
 
     txn.hmrc_category = body.hmrc_category
     txn.property_id = body.property_id
+    txn.allowable_amount = body.allowable_amount
     txn.status = "confirmed"
     await session.flush()
     await session.refresh(txn)

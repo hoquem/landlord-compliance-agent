@@ -27,9 +27,11 @@ from src.core.export_pack import (
     CumulativeDecreaseError,
     ExportBlockedError,
     ExportEntity,
+    MortgageSplitRequiredError,
     SimplePnlPack,
     TxnRow,
     assert_history_intact,
+    assert_mortgage_interest_separated,
     build_export_pack,
     quarter_label,
     quarter_number,
@@ -460,3 +462,169 @@ def test_column_mapping_round_trips() -> None:
     assert read_back[HmrcCategory.RENT_INCOME] == Decimal("1200.00")
     assert read_back[HmrcCategory.REPAIRS_MAINTENANCE] == Decimal("-84.99")
     assert all(read_back[c] == Decimal("0.00") for c in CATEGORY_COLUMNS if c not in totals)
+
+
+# ---------------------------------------------------------------------------
+# Mortgage interest: separating the allowable part from the capital.
+#
+# A repayment mortgage arrives as one direct debit and only the interest is
+# deductible. Until 2026-08-06 the whole payment was counted, which overstates
+# costs and understates profit. Found on real data; the synthetic golden set
+# had no case like it, because it was invented by someone who had not met one.
+# ---------------------------------------------------------------------------
+JOINT = {PROPERTY_2: {ENTITY: Decimal("60.00"), OTHER_ENTITY: Decimal("40.00")}}
+
+
+def mortgage_row(
+    *,
+    amount: str = "1250.00",
+    allowable: str | None = "412.55",
+    direction: str = "out",
+    property_id: uuid.UUID | None = PROPERTY,
+    when: date = date(2026, 5, 28),
+) -> TxnRow:
+    """One repayment-mortgage direct debit, with its interest portion."""
+    return TxnRow(
+        id=uuid.uuid4(),
+        date=when,
+        amount=Decimal(amount),
+        allowable_amount=None if allowable is None else Decimal(allowable),
+        direction=direction,
+        hmrc_category=HmrcCategory.FINANCE_COSTS_RESIDENTIAL,
+        status="confirmed",
+        entity_id=ENTITY,
+        property_id=property_id,
+    )
+
+
+def test_only_the_allowable_part_of_a_payment_reaches_the_totals() -> None:
+    """The whole point: £1,324.35 leaves the account, £412.55 is deductible."""
+    pack = build_export_pack(
+        INDIVIDUAL, tax_year=2026, quarter=1,
+        transactions=[mortgage_row()], ownerships=OWNERSHIPS,
+    )
+
+    assert pack.totals[HmrcCategory.FINANCE_COSTS_RESIDENTIAL] == Decimal("412.55")
+
+
+def test_a_payment_with_no_allowable_amount_still_counts_in_full() -> None:
+    """``None`` means "all of it" -- the ordinary case, and every existing row."""
+    pack = build_export_pack(
+        INDIVIDUAL, tax_year=2026, quarter=1,
+        transactions=[mortgage_row(allowable=None)], ownerships=OWNERSHIPS,
+    )
+
+    assert pack.totals[HmrcCategory.FINANCE_COSTS_RESIDENTIAL] == Decimal("1250.00")
+
+
+def test_the_interest_is_apportioned_by_ownership_not_the_payment() -> None:
+    """**A jointly-owned repayment mortgage splits the interest, not the debit.**
+
+    The two figures are far enough apart to tell which one was split: 60% of
+    the interest is 247.53, while 60% of the payment would be 794.61. An
+    implementation that substituted after apportioning, rather than before,
+    would produce the second.
+    """
+    pack = build_export_pack(
+        INDIVIDUAL, tax_year=2026, quarter=1,
+        transactions=[mortgage_row(property_id=PROPERTY_2)], ownerships=JOINT,
+    )
+
+    assert pack.totals[HmrcCategory.FINANCE_COSTS_RESIDENTIAL] == Decimal("247.53")
+
+
+def test_the_allowable_part_is_signed_by_the_same_rule_as_the_amount() -> None:
+    """A refund of overpaid interest must reduce the expense, not add income.
+
+    ``allowable_amount`` is a magnitude like ``amount``, so it goes through
+    :func:`signed_amount` identically. Storing it pre-signed would make this
+    case silently wrong in the one direction nobody checks by hand.
+    """
+    pack = build_export_pack(
+        INDIVIDUAL, tax_year=2026, quarter=1,
+        transactions=[
+            mortgage_row(),
+            mortgage_row(amount="100.00", allowable="40.00", direction="in",
+                         when=date(2026, 6, 1)),
+        ],
+        ownerships=OWNERSHIPS,
+    )
+
+    assert pack.totals[HmrcCategory.FINANCE_COSTS_RESIDENTIAL] == Decimal("372.55")
+
+
+def test_an_unsplit_repayment_mortgage_payment_blocks_the_export() -> None:
+    """Silence is the failure mode this replaces.
+
+    The category is right and the confidence is high; only the amount is
+    wrong. Nothing else in the pipeline notices, so the export has to.
+    """
+    txn = mortgage_row(allowable=None)
+
+    with pytest.raises(MortgageSplitRequiredError) as caught:
+        assert_mortgage_interest_separated(
+            transactions=[txn],
+            window=(date(2026, 4, 6), date(2026, 7, 5)),
+            repayment_properties={PROPERTY},
+        )
+
+    assert caught.value.blockers == [txn.id]
+
+
+def test_a_split_payment_passes() -> None:
+    """Supplying the interest figure is what clears it."""
+    assert_mortgage_interest_separated(
+        transactions=[mortgage_row(allowable="412.55")],
+        window=(date(2026, 4, 6), date(2026, 7, 5)),
+        repayment_properties={PROPERTY},
+    )
+
+
+def test_an_interest_only_mortgage_needs_no_split() -> None:
+    """The whole payment is interest, so there is nothing to separate."""
+    assert_mortgage_interest_separated(
+        transactions=[mortgage_row(allowable=None)],
+        window=(date(2026, 4, 6), date(2026, 7, 5)),
+        repayment_properties=set(),
+    )
+
+
+def test_marking_the_mortgage_repayment_after_confirming_still_blocks() -> None:
+    """**Why the guard is at export and not at confirmation.**
+
+    A line confirmed while the property looked interest-only, and the property
+    corrected afterwards, is exactly the ordering a confirm-time check misses.
+    The property's state is read when the figures are produced, not when the
+    line was agreed.
+    """
+    already_confirmed = mortgage_row(allowable=None)
+
+    with pytest.raises(MortgageSplitRequiredError):
+        assert_mortgage_interest_separated(
+            transactions=[already_confirmed],
+            window=(date(2026, 4, 6), date(2026, 7, 5)),
+            repayment_properties={PROPERTY},  # set only now
+        )
+
+
+def test_a_payment_outside_the_window_does_not_block() -> None:
+    """A later quarter's unsplit payment must not hold up this one."""
+    assert_mortgage_interest_separated(
+        transactions=[mortgage_row(allowable=None, when=date(2026, 9, 1))],
+        window=(date(2026, 4, 6), date(2026, 7, 5)),
+        repayment_properties={PROPERTY},
+    )
+
+
+def test_a_finance_cost_with_no_property_is_not_checked() -> None:
+    """**A known hole, recorded rather than hidden.**
+
+    With no ``property_id`` there is no mortgage type to consult, so this
+    passes. Borrowing is inherently per-property so it should be rare, but if
+    it ever stops being rare this test is where the decision was made.
+    """
+    assert_mortgage_interest_separated(
+        transactions=[mortgage_row(allowable=None, property_id=None)],
+        window=(date(2026, 4, 6), date(2026, 7, 5)),
+        repayment_properties={PROPERTY},
+    )

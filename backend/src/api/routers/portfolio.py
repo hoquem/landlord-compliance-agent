@@ -83,6 +83,7 @@ router = APIRouter(tags=["portfolio"])
 TaxRegime = Literal["mtd_itsa", "corporation_tax"]
 QuarterBasis = Literal["tax_year", "calendar_election"]
 FinanceCostClassification = Literal["residential", "non_residential"]
+MortgageType = Literal["none", "interest_only", "repayment"]
 
 #: What an ownership set has to add up to, exactly.
 _WHOLE = Decimal(100)
@@ -235,6 +236,10 @@ class PropertyCreate(_StrictBody):
     #: Mirrors the column's own ``default 'GB'`` -- see ``quarter_basis``.
     country: str = Field(default="GB", min_length=1)
     finance_cost_classification: FinanceCostClassification
+    #: Mirrors the column's own ``default 'none'`` -- see ``quarter_basis``.
+    #: ``repayment`` makes an interest figure required on this property's
+    #: finance costs before a period containing them can be exported.
+    mortgage_type: MortgageType = "none"
     epc_rating: str | None = None
     epc_expiry: datetime.date | None = None
     bedroom_count: int | None = Field(default=None, ge=0)
@@ -258,6 +263,7 @@ class PropertyUpdate(_PatchBody):
             "country",
             "finance_cost_classification",
             "licensing_flag",
+            "mortgage_type",
         }
     )
 
@@ -271,6 +277,7 @@ class PropertyUpdate(_PatchBody):
     epc_expiry: datetime.date | None = None
     bedroom_count: int | None = Field(default=None, ge=0)
     licensing_flag: bool | None = None
+    mortgage_type: MortgageType | None = None
 
 
 class PropertyRead(BaseModel):

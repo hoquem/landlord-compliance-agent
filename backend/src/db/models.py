@@ -32,6 +32,14 @@ from src.core.categories import HmrcCategory
 
 tax_regime_enum = PGEnum("mtd_itsa", "corporation_tax", name="tax_regime", create_type=False)
 quarter_basis_enum = PGEnum("tax_year", "calendar_election", name="quarter_basis", create_type=False)
+#: Whether payments on a property's borrowing need an interest/capital split.
+#: Three values rather than a boolean: "no borrowing" is not the same claim as
+#: "borrowing where the whole payment is interest", and a boolean would force
+#: one of them to be a lie. See supabase/migrations/0005_mortgage_split.sql.
+mortgage_type_enum = PGEnum(
+    "none", "interest_only", "repayment", name="mortgage_type", create_type=False
+)
+
 finance_cost_classification_enum = PGEnum(
     "residential", "non_residential", name="finance_cost_classification", create_type=False
 )
@@ -166,6 +174,9 @@ class Property(Base):
     city: Mapped[str] = mapped_column(Text, nullable=False)
     postcode: Mapped[str] = mapped_column(Text, nullable=False)
     country: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'GB'"))
+    mortgage_type: Mapped[str] = mapped_column(
+        mortgage_type_enum, nullable=False, server_default="none"
+    )
     finance_cost_classification: Mapped[str] = mapped_column(
         finance_cost_classification_enum, nullable=False
     )
@@ -269,6 +280,10 @@ class Transaction(Base):
     property_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("properties.id"))
     date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    #: Portion of ``amount`` that is allowable, or ``None`` for all of it. A
+    #: magnitude like ``amount``; the category-aware sign rule and the
+    #: ownership split are both applied to it downstream.
+    allowable_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     direction: Mapped[str] = mapped_column(transaction_direction_enum, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     hmrc_category: Mapped[HmrcCategory | None] = mapped_column(hmrc_category_enum)

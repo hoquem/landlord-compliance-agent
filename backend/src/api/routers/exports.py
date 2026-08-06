@@ -51,6 +51,7 @@ Four things here are not ordinary CRUD.
     supabase/migrations/0004_exports_bucket.sql.
 """
 
+import datetime
 import uuid
 from decimal import Decimal
 
@@ -71,19 +72,32 @@ from src.core.export_pack import (
     CumulativeDecreaseError,
     ExportBlockedError,
     ExportEntity,
+    MortgageSplitRequiredError,
     QuarterlyPack,
     SimplePnlPack,
     TxnRow,
     assert_history_intact,
+    assert_mortgage_interest_separated,
     build_export_pack,
     quarter_label,
     quarter_number,
     totals_from_columns,
     totals_to_columns,
 )
-from src.core.quarters import MissingOwnershipError, format_tax_year
+from src.core.quarters import (
+    MissingOwnershipError,
+    _quarter_end_date,
+    format_tax_year,
+)
 from src.core.splits import InvalidOwnershipError
-from src.db.models import Document, Entity, MtdQuarter, PropertyOwnership, Transaction
+from src.db.models import (
+    Document,
+    Entity,
+    MtdQuarter,
+    Property,
+    PropertyOwnership,
+    Transaction,
+)
 from src.db.session import async_session_factory
 
 router = APIRouter(tags=["exports"])
@@ -151,6 +165,7 @@ async def _load_transactions(session, org_id: uuid.UUID) -> list[TxnRow]:
             # pre-signed amount built here would be wrong for refunds and
             # right for everything anyone checks by hand.
             amount=row.amount,
+            allowable_amount=row.allowable_amount,
             direction=row.direction,
             hmrc_category=row.hmrc_category,
             status=row.status,
@@ -159,6 +174,25 @@ async def _load_transactions(session, org_id: uuid.UUID) -> list[TxnRow]:
         )
         for row in rows
     ]
+
+
+async def _load_repayment_properties(session, org_id: uuid.UUID) -> set[uuid.UUID]:
+    """Ids of the org's properties whose borrowing is a repayment mortgage.
+
+    Read at export time, not at confirmation, so marking a property
+    ``repayment`` after its payments were confirmed still blocks the export --
+    see :func:`~src.core.export_pack.assert_mortgage_interest_separated`.
+
+    :param session: the session to query in.
+    :param org_id: the caller's org.
+    :returns: the property ids needing an interest figure on finance costs.
+    """
+    rows = await session.scalars(
+        select(Property.id).where(
+            Property.org_id == org_id, Property.mortgage_type == "repayment"
+        )
+    )
+    return set(rows)
 
 
 async def _load_ownerships(
@@ -309,8 +343,20 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
         filed = await _load_filed_quarters(
             session, auth.org_id, entity.id, tax_year_label
         )
+        repayment_properties = await _load_repayment_properties(session, auth.org_id)
 
         try:
+            # Before the pack, because an unsplit mortgage payment makes every
+            # figure in it wrong -- there is no point computing totals from a
+            # number we already know overstates the expense.
+            assert_mortgage_interest_separated(
+                transactions=transactions,
+                window=(
+                    datetime.date(body.tax_year, 4, 6),
+                    _quarter_end_date(body.tax_year, body.quarter),
+                ),
+                repayment_properties=repayment_properties,
+            )
             pack = build_export_pack(
                 export_entity,
                 tax_year=body.tax_year,
@@ -329,6 +375,12 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
                 ownerships=ownerships,
                 stored_by_quarter=filed,
             )
+        except MortgageSplitRequiredError as exc:
+            raise _unprocessable(
+                f"Cannot export: {exc}. Record the interest portion of each "
+                "payment, or set the property's mortgage to interest-only if "
+                "the whole payment is interest."
+            ) from exc
         except ExportBlockedError as exc:
             raise _unprocessable(str(exc)) from exc
         except CumulativeDecreaseError as exc:
