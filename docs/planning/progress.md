@@ -1,5 +1,80 @@
 # Progress Log
 
+## Session 2026-08-06 (cont.) — one real quarter, and the bug it found
+
+**The validation gate is passed.** A real Starling export, real money, real
+Supabase ES256 session, real model call, real export pack. Every figure
+matched hand-computation and the PDF rendered.
+
+Sample Holdings Ltd, 2025-26 Q3 (YTD 6 Apr 2025 – 5 Jan 2026), from a
+28-row statement:
+
+| category | total |
+|---|---|
+| rent_income | 15,300.00 |
+| finance_costs_residential | 11,919.15 |
+| legal_professional | 664.00 |
+| rates_insurance_ground | 459.78 |
+
+Profit 2,257.07. The file held 12 rent and 12 mortgage rows; exactly 9 of each
+fell inside the window, with the prior tax year and Q4 correctly excluded.
+
+### THE FINDING: a capital-and-interest mortgage is silently mis-stated
+
+**This account is interest-only, so its figures are right. Mahmud confirmed
+other accounts are capital-and-interest, and for those the system is wrong.**
+
+A repayment mortgage arrives as one direct debit. Only the *interest* is an
+allowable finance cost; the capital portion is not deductible at all. The bank
+line does not distinguish them, the parser cannot, and nothing downstream
+asks. The categoriser will label the whole payment
+`finance_costs_residential` at high confidence — because it is, in part —
+which overstates costs and understates profit on a real return.
+
+Nothing catches it: not the parser, not the review screen (the proposal is
+*correct as far as it goes*), not the export guards. **The golden set has no
+case like it because the golden set is synthetic and I invented it.** This is
+precisely the class of defect only real data surfaces.
+
+Not fixed. Options, roughly ascending in cost: flag `finance_costs_residential`
+lines on a property whose mortgage is marked repayment and require a split at
+review; store an interest/capital ratio per property and apportion; or ingest
+the lender's annual interest certificate and reconcile. All need a product
+decision first.
+
+### What the model got right on real data
+
+- Rent ×9 at 0.95, mortgage ×9 at 0.85 — both correct.
+- **It attributed 59 Sample Rise to the rent and the mortgage** though no
+  description names a property, and correctly left the accountancy, filing and
+  insurance costs unattributed as entity-level.
+- It gave its **lowest confidence (0.50) to the one line that genuinely needed
+  a human** — the insurance premium, which it had guessed as personal.
+
+Two corrections were needed out of 28: a Companies House filing fee proposed
+as `personal_non_business` (a real company cost), and the insurance premium.
+
+### A mistake of mine worth recording
+
+I offered Mahmud a category list for the insurance line that **omitted
+`rates_insurance_ground`** — the SA105 box literally meant for rates,
+insurance and ground rent. He picked `other_allowable` from the options I
+gave, and told me it was building insurance. The profit figure is identical
+either way, but the money would have sat in the wrong box on the return.
+Caught only because he said what the payment *was* rather than just choosing.
+A picker that offers the wrong options is worse than no picker.
+
+### Also confirmed
+
+The first account picked turned out to be a **corporation-tax** entity, so the
+run exercised `SimplePnlPack`: no `mtd_quarters` row, `version: None`, a P&L
+rather than a quarterly return. That path had unit tests and had never seen
+real data. It behaved correctly.
+
+The 403-for-unprovisioned-user guard fired for real during setup, before
+`seed_org.py` had run.
+
+
 ## Session 2026-08-06 — ES256, and the last blocker closed
 
 **A real Supabase-issued token now authenticates.** Verified end to end: a
