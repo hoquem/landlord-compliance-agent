@@ -1,3 +1,10 @@
 # Environment variables (real secrets live only in the untracked .env)
 .env
 .env.local
+
+# The real golden set, built by backend/evals/build_golden_set.py from
+# confirmed transactions. It carries bank descriptions and property labels
+# verbatim -- counterparty names, references, addresses -- and this repo is
+# public. evals/golden_set.jsonl stays synthetic so the harness runs out of
+# the box; this one never leaves the machine.
+backend/evals/golden_set.real.jsonl

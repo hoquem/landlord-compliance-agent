@@ -5,13 +5,24 @@ statement lines and reports per-category precision/recall plus overall
 accuracy, exiting non-zero when accuracy falls below a threshold.
 
 .. important::
-   ``evals/golden_set.jsonl`` is currently 20 SYNTHETIC lines (each marked
-   ``"_synthetic": true``) invented to give this harness something to run
-   against before Mahmud has real confirmed categorisations to export. They
-   are realistic UK landlord statement lines but are not real data -- they
-   must be REPLACED wholesale by real confirmed lines once that data
-   exists, at which point ``"_synthetic"`` should read ``false`` (or the
-   field dropped) so nobody mistakes a stale synthetic run for a real one.
+   ``evals/golden_set.jsonl`` is 20 SYNTHETIC lines (each marked
+   ``"_synthetic": true``), kept so this harness runs out of the box. **It
+   flatters the model**, and measurably: on 2026-08-06 the same model scored
+   85% against it and **66.67% against real confirmed lines** -- below the
+   0.70 threshold, so the real run *fails*. Both misses were categories a
+   human had corrected by hand during the first real quarter, which is the
+   benchmark doing its job.
+
+   The real set is built by ``evals/build_golden_set.py`` into
+   ``evals/golden_set.real.jsonl``, which ``.gitignore`` excludes: it carries
+   bank descriptions and property labels verbatim and this repository is
+   public. Run against it explicitly::
+
+       uv run --env-file ../.env python evals/build_golden_set.py --org "<org>"
+       uv run --env-file ../.env python evals/run_eval.py --golden evals/golden_set.real.jsonl
+
+   Treat a score against the synthetic set as a smoke test, never as a
+   measurement.
 
 This harness doubles as a model-selection tool: run it twice with
 ``--model`` pointed at different LiteLLM/CrewAI model ids (e.g. a local

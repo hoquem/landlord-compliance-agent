@@ -199,9 +199,18 @@ stubbed flow.
 
 Two things to know before trusting a number from it:
 
-- **The golden set is 20 synthetic lines**, each marked `"_synthetic": true`.
-  They are realistic but invented, and must be **replaced wholesale** by real
-  confirmed lines once those exist.
+- **The committed golden set is 20 synthetic lines**, and it flatters the
+  model. Measured 2026-08-06: 85% against the synthetic set, **66.67% against
+  real confirmed lines** — below the threshold, so the real run fails. Build
+  a real one from your own confirmed transactions:
+
+  ```bash
+  uv run --env-file ../.env python evals/build_golden_set.py --org "<your org>"
+  uv run --env-file ../.env python evals/run_eval.py --golden evals/golden_set.real.jsonl
+  ```
+
+  The output is gitignored on purpose — it carries bank descriptions and
+  property labels verbatim, and this repository is public.
 - **It is a cold-start comparison.** The harness passes no few-shot examples,
   while production supplies up to 50 confirmed transactions per org. A verdict
   here is zero-shot quality, not behaviour once an org has history.

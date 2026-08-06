@@ -1,5 +1,52 @@
 # Progress Log
 
+## Session 2026-08-06 (cont.) — the golden set, and what it was hiding
+
+**The synthetic golden set was flattering the model by nearly twenty points.**
+Same model, same day:
+
+    synthetic set (20 invented lines)   85.00%
+    real confirmed lines                66.67%   FAILS the 0.70 threshold
+
+**Both misses were categories a human had corrected by hand** during the first
+real quarter — the building-insurance premium and a Companies House filing
+fee, each proposed as `personal_non_business`. So the benchmark now predicts
+the work rather than congratulating the model, which is the entire point of
+replacing it.
+
+### The real set does not go in the repo
+
+A golden set carries `description` and `property_label` verbatim: counterparty
+names, references, addresses. The repository is public as of today, so
+committing real confirmed lines would put back exactly what three history
+rewrites removed. `evals/golden_set.real.jsonl` is gitignored;
+`evals/golden_set.jsonl` stays synthetic so the harness runs out of the box.
+
+`evals/build_golden_set.py` is the committed part — a script that reads the
+local database contains no portfolio data at all.
+
+### Two things the build script had to learn
+
+**One row per distinct description, not per transaction.** The statement holds
+the same rent credit twelve times and the same direct debit twelve times.
+Scoring every row would let one correct answer bank twelve marks. Six real
+cases standing for 28 transactions, with the occurrence count recorded so the
+skew stays visible instead of being averaged away.
+
+**`--org` is required, and the first run showed why.** Without it the script
+swept in the Demo Portfolio's mock quarter and produced 22 entries — of which
+16 were fictional, their "expected" categories chosen by a seeding script
+rather than by a person. A benchmark four times larger and grading the model
+against invented answers. It now refuses and lists the orgs.
+
+### Honest limits
+
+Six cases is not a benchmark. It covers one bank account, and two of the six
+are the repeated rent and mortgage lines. Making the number mean something
+needs the other accounts imported and confirmed — which is now a
+five-minute job per statement rather than a project.
+
+
 ## Session 2026-08-06 (cont.) — RLS is actually in force
 
 **The tenant boundary is now the database's, not just the code's.** 519
