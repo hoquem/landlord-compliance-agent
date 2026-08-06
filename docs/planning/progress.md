@@ -84,7 +84,7 @@ still the whole of it. Now said in the file.
 
 **The refusal is now resolvable where it happens.** 510 backend tests, 119
 Flutter, ruff and analyze clean. Driven on the real quarter: typing `1500`
-against a £1,324.35 payment reads *"That is more than the payment."* and the
+against a £1,250.00 payment reads *"That is more than the payment."* and the
 row stays unconfirmable; `412.55` unlocks it, and the figure reaches the
 database as `allowable_amount`.
 
@@ -137,7 +137,7 @@ rather than a defect, but it is two clicks where a user expects one.
 **A repayment-mortgage payment can no longer be silently counted in full.**
 508 backend tests, 113 Flutter, ruff and analyze clean.
 
-Verified against the real quarter: marking 59 Sample Rise `repayment` (a
+Verified against the real quarter: marking the property `repayment` (a
 counterfactual — it is genuinely interest-only) turned the export into a 422
 naming all **9** payments. Set back to the truth, the figures are unchanged.
 So the guard would have caught the case Mahmud confirmed exists on his other
@@ -203,7 +203,7 @@ the UI. That is the next commit, not a surprise.
 Supabase ES256 session, real model call, real export pack. Every figure
 matched hand-computation and the PDF rendered.
 
-Sample Holdings Ltd, 2025-26 Q3 (YTD 6 Apr 2025 – 5 Jan 2026), from a
+The company entity, 2025-26 Q3 (YTD 6 Apr 2025 – 5 Jan 2026), from a
 28-row statement:
 
 | category | total |
@@ -242,7 +242,7 @@ decision first.
 ### What the model got right on real data
 
 - Rent ×9 at 0.95, mortgage ×9 at 0.85 — both correct.
-- **It attributed 59 Sample Rise to the rent and the mortgage** though no
+- **It attributed the property to the rent and the mortgage** though no
   description names a property, and correctly left the accountancy, filing and
   insurance costs unattributed as entity-level.
 - It gave its **lowest confidence (0.50) to the one line that genuinely needed

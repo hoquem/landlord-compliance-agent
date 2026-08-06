@@ -498,7 +498,7 @@ def mortgage_row(
 
 
 def test_only_the_allowable_part_of_a_payment_reaches_the_totals() -> None:
-    """The whole point: £1,324.35 leaves the account, £412.55 is deductible."""
+    """The whole point: £1,250.00 leaves the account, £412.55 is deductible."""
     pack = build_export_pack(
         INDIVIDUAL, tax_year=2026, quarter=1,
         transactions=[mortgage_row()], ownerships=OWNERSHIPS,

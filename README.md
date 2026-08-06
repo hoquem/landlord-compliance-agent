@@ -18,6 +18,7 @@ limitation of it.
 | `docs/planning/progress.md` | What happened and why, including every wrong turn. |
 | `docs/domain/` | The glossary. **Names in code come from here.** |
 | `PRODUCT.md` / `DESIGN.md` | Who it is for, and the design language the Flutter app implements. |
+| `SECURITY.md` | What to report, what is deliberate, and how to report it privately. |
 
 ## Setup
 
@@ -257,3 +258,15 @@ Known limits, all deliberate: the golden set is synthetic; there is no CI; the
 app runs against the local Supabase stack only (a cloud project exists but is
 parked); and no screen beyond sign-in has been exercised against a real Google
 sign-in, which only Mahmud can perform.
+
+## Licence
+
+[AGPL-3.0](LICENSE). You may run, modify and self-host this freely. If you
+offer it to others as a network service, the licence requires you to publish
+your modifications — which is the point: the intent is that anyone can host
+this for themselves, not that someone can take it closed.
+
+Chosen over MIT deliberately. The moat here was never the code: it is the bank
+format registry built from real exports, keeping pace with MTD, RRA and PRS
+changes, and a golden set drawn from real confirmed lines. A fork inherits
+none of that.
