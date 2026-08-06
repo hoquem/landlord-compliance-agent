@@ -9,7 +9,17 @@ visible failure into a quiet one repeated forever.
 
 **The worker is the one component that legitimately reads across orgs**, and
 that makes it the one place where a missing filter has no backstop at all --
-there is no authenticated caller whose ``org_id`` bounds the query. Every
+there is no authenticated caller whose ``org_id`` bounds the query.
+
+**It also holds the one credential row-level security does not apply to.**
+Since 2026-08-06 the API connects as ``app_api``, where an unfiltered query
+returns only the caller's org; the worker connects as ``app_worker``, which
+has ``BYPASSRLS``, because claiming a job from a shared queue means reading
+rows belonging to orgs it is not acting for. So the guarantee the rest of the
+codebase gained does not extend here, deliberately, and the filters below are
+still the entire boundary. That asymmetry was the trade: many query sites
+across seven routers get the database's help, and the one file that cannot is
+small enough to watch. Every
 statement below is filtered by ``job.org_id``, taken from the claimed row and
 never from the payload: the payload is client-influenced data (it comes from
 whatever enqueued the job), while the row's ``org_id`` was written by the

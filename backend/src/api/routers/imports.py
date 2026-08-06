@@ -1,6 +1,12 @@
 """Statement import: upload a bank CSV, store it, parse it, queue categorisation.
 
-**Every query here filters ``org_id``**, in the statement itself or through
+**Every query still filters ``org_id``**, and since 2026-08-06 the database
+enforces it too: the API connects as ``app_api``, a role with row-level
+security applied, so an unfiltered query returns *this org's* rows rather than
+everyone's. The filter is now the first of two defences instead of the only
+one -- keep writing it (it is what makes the intent readable, and RLS is a
+backstop, not a design), but a slip is no longer a leak. Proved by
+``tests/db/test_rls_enforced.py``, which queries with no ``where`` at all.
 :func:`~src.api.scoping.get_owned_or_404`. ``src/db/session.py`` connects as
 the ``postgres`` superuser (as ``DATABASE_URL`` is configured), so the
 row-level-security policies of ``0002_rls.sql`` and ``0003_storage.sql`` are
@@ -55,7 +61,7 @@ from src.core.parser import (
     registered_banks,
 )
 from src.db.models import Entity, Import, JobQueue, Transaction
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["imports"])
 
@@ -140,7 +146,7 @@ async def create_import(
     """
     content = await file.read()
 
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         # entity_id is client input; this is what stops one org filing a
         # statement against another org's entity.
         await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
@@ -174,7 +180,7 @@ async def create_import(
         # module as though the user's file were at fault.
         error_detail = {"row_number": None, "message": str(exc)}
 
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         record = Import(
             org_id=auth.org_id,
             entity_id=entity_id,
@@ -236,7 +242,7 @@ async def list_imports(auth: CurrentAuth) -> list[ImportRead]:
     :param auth: the authenticated caller.
     :returns: every import in their org, and only those.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         records = await session.scalars(
             select(Import).where(Import.org_id == auth.org_id).order_by(Import.created_at, Import.id)
         )

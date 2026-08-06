@@ -95,7 +95,7 @@ def test_session_database_url_raises_loudly_when_unset(monkeypatch: pytest.Monke
     """
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(RuntimeError, match="DATABASE_URL is not set"):
-        session_module._database_url()
+        session_module._dsn("DATABASE_URL")
 
 
 def test_session_database_url_rewrites_scheme_to_asyncpg_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,7 +107,31 @@ def test_session_database_url_rewrites_scheme_to_asyncpg_dsn(monkeypatch: pytest
     load-bearing, not cosmetic.
     """
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/dbname")
-    assert session_module._database_url() == "postgresql+asyncpg://user:pass@localhost:5432/dbname"
+    assert (
+        session_module._dsn("DATABASE_URL")
+        == "postgresql+asyncpg://user:pass@localhost:5432/dbname"
+    )
+
+
+@pytest.mark.parametrize(
+    "variable", ["DATABASE_URL", "API_DATABASE_URL", "WORKER_DATABASE_URL"]
+)
+def test_every_connection_url_is_required(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    """All three, not just the first.
+
+    The dangerous one is ``API_DATABASE_URL``: if a missing value fell back to
+    ``DATABASE_URL`` the API would silently connect as the superuser, row-level
+    security would stop applying, and **every test in this suite would still
+    pass** -- including the ones in ``test_rls_enforced.py``, because they use
+    the factory rather than the variable. Failing loudly is the only thing
+    standing between a typo and a silently disabled tenant boundary.
+    """
+    monkeypatch.delenv(variable, raising=False)
+
+    with pytest.raises(RuntimeError, match=f"{variable} is not set"):
+        session_module._dsn(variable)
 
 
 @pytest.mark.asyncio

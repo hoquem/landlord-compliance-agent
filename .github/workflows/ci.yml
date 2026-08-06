@@ -135,6 +135,12 @@ jobs:
             # app raises without it. The value has to match what
             # tests/api/test_cors.py treats as the app's origin.
             echo "CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000"
+            # The least-privilege roles created by migration 0006. Deliberately
+            # NOT $DB_URL: pointing the API at the superuser disables row-level
+            # security, and only tests/db/test_rls_enforced.py would notice.
+            host="${DB_URL#*@}"
+            echo "API_DATABASE_URL=postgresql://app_api:app_api_local_dev@$host"
+            echo "WORKER_DATABASE_URL=postgresql://app_worker:app_worker_local_dev@$host"
           } >> "$GITHUB_ENV"
 
       - name: Full suite

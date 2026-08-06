@@ -43,7 +43,7 @@ import signal
 from sqlalchemy import select, update
 
 from src.db.models import Import, JobQueue
-from src.db.session import async_session_factory
+from src.db.session import worker_session_factory
 from src.worker.jobs import (
     FAILURE_IMPORT_STATUS,
     HANDLERS,
@@ -73,7 +73,7 @@ async def claim_next_job() -> JobQueue | None:
     :returns: the claimed job, detached from its session, or ``None`` if the
         queue was empty.
     """
-    async with async_session_factory() as session:
+    async with worker_session_factory() as session:
         oldest_queued = (
             select(JobQueue.id)
             .where(JobQueue.status == "queued")
@@ -110,7 +110,7 @@ async def mark_failed(job: JobQueue, error: str) -> None:
     :param job: the failed job.
     :param error: the exception text to store, for the imports screen.
     """
-    async with async_session_factory() as session:
+    async with worker_session_factory() as session:
         await session.execute(
             update(JobQueue).where(JobQueue.id == job.id).values(status="failed", error=error)
         )
@@ -133,7 +133,7 @@ async def mark_done(job: JobQueue) -> None:
 
     :param job: the job that completed.
     """
-    async with async_session_factory() as session:
+    async with worker_session_factory() as session:
         await session.execute(
             update(JobQueue).where(JobQueue.id == job.id).values(status="done")
         )
@@ -160,7 +160,7 @@ async def run_one_job() -> bool:
                 f"no handler registered for job type {job.job_type!r}; "
                 f"known: {', '.join(sorted(HANDLERS))}"
             )
-        async with async_session_factory() as session:
+        async with worker_session_factory() as session:
             await handler(session, job)
             await session.commit()
     except Exception as exc:

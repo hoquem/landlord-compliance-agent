@@ -1,5 +1,85 @@
 # Progress Log
 
+## Session 2026-08-06 (cont.) — RLS is actually in force
+
+**The tenant boundary is now the database's, not just the code's.** 519
+backend tests, 119 Flutter, ruff and analyze clean.
+
+The proof, run against the live stack as `app_api`:
+
+    as postgres (superuser):          properties=4   transactions=48
+    as app_api, no claim:             properties=0
+    as app_api, org A:                properties=1   transactions=28
+    as app_api, org B:                properties=3   transactions=20
+    unfiltered `select count(*) from transactions`  ->  28, not 48
+
+1+3=4 and 28+20=48. **A query with no `where` clause returns one org's rows.**
+That is the whole change; everything else is plumbing.
+
+### The design
+
+Two roles. `app_api` has RLS applied and is not the table owner (an owner
+bypasses RLS unless the table also has FORCE, and relying on a setting nobody
+looks at is not a guarantee). `app_worker` has BYPASSRLS because it claims
+jobs across orgs with no authenticated caller to scope it.
+
+That asymmetry is the trade, and it is deliberate: ~26 query sites across
+seven routers get the database's help; the one file that cannot is small
+enough to watch. It is now stated in `jobs.py` itself, not only here.
+
+**Zero policy changes.** The API sets `request.jwt.claims` per transaction,
+which is exactly what `auth.uid()` reads — verified against the running stack
+rather than assumed — so every policy written in `0002_rls.sql` for the
+PostgREST path works unchanged. No second definition of "which org" anywhere.
+
+**Transaction-local, not session-local.** `set_config(..., true)` dies with
+the transaction, so a pooled connection cannot carry one caller's org into the
+next request. Session-local would pass every test that ran one request at a
+time and leak in production; `test_the_claim_does_not_survive_into_the_next_session`
+is what pins it.
+
+**`org_session` asserts the claim stuck.** `set_config` outside a transaction
+silently does nothing, and the symptom would be every query returning zero
+rows — which reads as "no data yet", not "authentication is broken". One
+check converts the worst available failure mode into a loud one.
+
+### Three things I got wrong on the way
+
+**The dispose fixture needed a sibling and my edit didn't land.** Three
+engines now, and the autouse fixture disposed one. Six auth tests failed with
+connections bound to closed event loops — the Task 13a bug, reproduced
+exactly. Worse, my first fix was a no-op replace that reported success: the
+docstring anchor didn't match. **Second time today.** The habit that catches
+it is asserting the replacement changed something, which the second attempt
+did.
+
+**`test_a_write_into_another_org_is_refused` passed for the wrong reason.**
+It used a string where a `date` belongs, so the insert died on a type error
+before ever reaching a policy — it would have passed with RLS switched off,
+which is precisely the failure the file exists to catch. Now the row is
+completely valid except for the org, and the test asserts the message names
+row-level security rather than merely that *something* raised.
+
+**Seven module docstrings asserted a claim the change invalidated** — "the
+filters are the entire tenant boundary". All corrected, plus `ENGINEERING.md`
+and `README.md`. The repo's rule is that a comment asserting a behaviour must
+name the test enforcing it; the corollary is that improving the behaviour
+means going back for the comments.
+
+### Two configuration mutations
+
+Pointing `API_DATABASE_URL` at the superuser kills 5 of the 6 RLS tests — the
+survivor being the superuser control, correctly. Giving the worker the
+RLS-enforced role kills 18 worker tests. Both are the mistakes someone would
+actually make.
+
+### What RLS still does not cover
+
+**Object storage.** Statement and export paths are built from `org_id` in
+`src/api/storage.py` and there is no database-level equivalent; that module is
+still the whole of it. Now said in the file.
+
+
 ## Session 2026-08-06 (cont.) — the interest split, in the UI
 
 **The refusal is now resolvable where it happens.** 510 backend tests, 119

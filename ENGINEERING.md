@@ -50,17 +50,37 @@ test collected happened to 401 before touching the database.
 
 ## Tenant isolation — read this before writing any router
 
-`DATABASE_URL` is the `postgres` superuser, which **bypasses RLS**. The
-policies in `supabase/migrations/0002_rls.sql` protect the PostgREST path the
-Flutter app uses directly, and are **inert on every API path**. There is no
-backstop under a forgotten filter, only a silent cross-tenant leak.
+**The database enforces this now, and it did not until 2026-08-06.** The API
+connects as `app_api`, a role with row-level security applied, and sets
+`request.jwt.claims` per transaction. An unfiltered query returns the caller's
+org's rows, not everyone's. `tests/db/test_rls_enforced.py` proves it by
+querying with no `where` clause at all.
 
-- Every query filters `org_id` — explicitly, or via `src/api/scoping.py`.
+Before that, both processes connected as the `postgres` superuser, which
+bypasses RLS. The policies in `0002_rls.sql` were written for the
+direct-from-Flutter PostgREST path — which the app never uses — so they
+protected nothing, and the manual filter was the only defence. That is worth
+remembering as a pattern: a control that exists, is correct and is tested can
+still be in force nowhere.
+
+- **Keep filtering `org_id` in every query anyway**, explicitly or via
+  `src/api/scoping.py`. RLS is a backstop, not a design: the filter is what
+  makes the intent readable, and it is the thing a reviewer can see.
 - A row in another org is a **404, never a 403**. A 403 confirms the id exists
   and turns the endpoint into an existence oracle over other tenants' ids.
-- Every new router needs a two-org isolation test **and** a filter-removal
-  probe proving that test has teeth. A test that passes with the filter
-  deleted is not a test.
+- **Open sessions with `org_session(auth.user_id)`**, never the raw factory.
+  The raw one sets no claim, and a session without a claim sees nothing —
+  which fails closed, but looks like "no data" rather than "broken".
+- Every new router still needs a two-org isolation test.
+
+Two things RLS does **not** cover, so they remain entirely on the code:
+
+- **The worker.** It connects as `app_worker`, which has `BYPASSRLS`, because
+  it claims jobs across orgs and has no authenticated caller. Its whole
+  boundary is the `org_id` on the claimed row. See `src/worker/jobs.py`.
+- **Object storage.** Statement and export paths are built from `org_id` in
+  `src/api/storage.py`, and there is no database-level equivalent. That module
+  is the whole of it.
 
 ## Interfaces
 
@@ -125,7 +145,12 @@ backstop under a forgotten filter, only a silent cross-tenant leak.
   finds no project and falls back to ambient Anaconda — ruff 0.12.0 instead of
   the pinned 0.16.0, which reports 5 false E402 failures.
 - A bare `pytest` runs **zero** tests: import-time env checks abort collection.
-  That is intended fail-loudly behaviour, and a CI hazard pinned to Task 24.
+  That is intended fail-loudly behaviour; `README.md` says what CI must do.
+- Three database URLs, on purpose: `DATABASE_URL` (superuser — tests,
+  migrations, `seed_org.py`), `API_DATABASE_URL` (`app_api`, RLS enforced) and
+  `WORKER_DATABASE_URL` (`app_worker`, BYPASSRLS). Pointing the API one at the
+  superuser silently disables the tenant boundary and every test still passes
+  except `tests/db/test_rls_enforced.py`.
 - Categorisation runs on a local Ollama model by default; `CATEGORISER_MODEL`
   is required and never defaults, so bank data cannot reach a provider nobody
   chose. CrewAI telemetry is disabled in every environment.

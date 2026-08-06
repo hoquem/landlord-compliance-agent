@@ -1,5 +1,10 @@
 """Portfolio setup endpoints: entities, properties, and property ownership.
 
+**Every query filters ``org_id``**, and since 2026-08-06 the database
+enforces it too -- the API connects as ``app_api``, where row-level
+security applies. The filter is the first of two defences now, not the
+only one. See ``tests/db/test_rls_enforced.py``.
+
 The foundational reference data everything else in the product hangs off --
 an org's ownership entities, its properties, and the split that says which
 entity owns what share of which property.
@@ -72,7 +77,7 @@ from src.api.audit import audit as _audit
 from src.api.auth import CurrentAuth
 from src.api.scoping import get_owned_or_404, not_found
 from src.db.models import Entity, Property, PropertyOwnership
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["portfolio"])
 
@@ -431,7 +436,7 @@ async def create_entity(payload: EntityCreate, auth: CurrentAuth) -> EntityRead:
         org and nowhere else.
     :returns: the created entity.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         entity = Entity(org_id=auth.org_id, **payload.model_dump())
         session.add(entity)
         # Flush (not commit) so the row -- and the server-generated id and
@@ -452,7 +457,7 @@ async def list_entities(auth: CurrentAuth) -> list[EntityRead]:
     :param auth: the authenticated caller.
     :returns: every entity in their org, and only those.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         entities = await session.scalars(
             select(Entity).where(Entity.org_id == auth.org_id).order_by(Entity.created_at, Entity.id)
         )
@@ -468,7 +473,7 @@ async def get_entity(entity_id: uuid.UUID, auth: CurrentAuth) -> EntityRead:
     :raises HTTPException: 404 if no such entity exists *in their org*.
     :returns: the entity.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         entity = await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
         return EntityRead.model_validate(entity)
 
@@ -489,7 +494,7 @@ async def update_entity(entity_id: uuid.UUID, payload: EntityUpdate, auth: Curre
     :raises HTTPException: 404 if no such entity exists in their org.
     :returns: the updated entity.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         entity = await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
 
         before = EntityRead.model_validate(entity).model_dump(mode="json")
@@ -520,7 +525,7 @@ async def create_property(payload: PropertyCreate, auth: CurrentAuth) -> Propert
         org and nowhere else.
     :returns: the created property.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         prop = Property(org_id=auth.org_id, **payload.model_dump())
         session.add(prop)
         # Flush (not commit) so the row -- and the server-generated id and
@@ -543,7 +548,7 @@ async def list_properties(auth: CurrentAuth) -> list[PropertyRead]:
     :param auth: the authenticated caller.
     :returns: every property in their org, and only those.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         properties = await session.scalars(
             select(Property)
             .where(Property.org_id == auth.org_id)
@@ -561,7 +566,7 @@ async def get_property(property_id: uuid.UUID, auth: CurrentAuth) -> PropertyRea
     :raises HTTPException: 404 if no such property exists *in their org*.
     :returns: the property.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         prop = await get_owned_or_404(session, Property, property_id, auth, what="property")
         return PropertyRead.model_validate(prop)
 
@@ -580,7 +585,7 @@ async def update_property(
         ``test_org_a_cannot_patch_org_bs_property``.
     :returns: the updated property.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         prop = await get_owned_or_404(session, Property, property_id, auth, what="property")
 
         before = PropertyRead.model_validate(prop).model_dump(mode="json")
@@ -622,7 +627,7 @@ async def get_property_ownership(
     :raises HTTPException: 404 if the property is not theirs.
     :returns: the current shares, ordered by entity id for stability.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         await get_owned_or_404(session, Property, property_id, auth, what="property")
         rows = await session.scalars(
             select(PropertyOwnership)
@@ -663,7 +668,7 @@ async def replace_property_ownership(
         100, or names an entity that isn't in the caller's org.
     :returns: the ownership set as stored.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         # An existence probe, not a load: nothing here reads a property
         # column. Written out rather than routed through
         # `get_owned_or_404` for that reason -- it selects one column, not

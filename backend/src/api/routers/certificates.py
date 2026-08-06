@@ -1,6 +1,12 @@
 """Compliance certificates: gas safety, EICR, EPC and the two licences.
 
-**Every query filters ``org_id``**, in the statement or through
+**Every query still filters ``org_id``**, and since 2026-08-06 the database
+enforces it too: the API connects as ``app_api``, a role with row-level
+security applied, so an unfiltered query returns *this org's* rows rather than
+everyone's. The filter is now the first of two defences instead of the only
+one -- keep writing it (it is what makes the intent readable, and RLS is a
+backstop, not a design), but a slip is no longer a leak. Proved by
+``tests/db/test_rls_enforced.py``, which queries with no ``where`` at all.
 :func:`~src.api.scoping.get_owned_or_404`. ``DATABASE_URL`` is the
 ``postgres`` superuser, so ``0002_rls.sql``'s policies are inert here.
 
@@ -66,7 +72,7 @@ from src.core.certificates import (
     uk_today,
 )
 from src.db.models import ComplianceCertificate, Document, Property
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["certificates"])
 
@@ -280,7 +286,7 @@ async def create_certificate(
     """
     _assert_dates_are_in_order(payload.issue_date, payload.expiry_date)
 
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         await _assert_references_are_the_callers(
             session,
             auth,
@@ -325,7 +331,7 @@ async def list_certificates(auth: CurrentAuth) -> list[PropertyCertificates]:
     :param auth: the authenticated caller.
     :returns: one group per property with certificates, in their org only.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         rows = await session.scalars(
             select(ComplianceCertificate)
             .join(Property, Property.id == ComplianceCertificate.property_id)
@@ -364,7 +370,7 @@ async def get_certificate(
     :raises HTTPException: 404 if no such certificate exists in their org.
     :returns: the certificate, with its derived status.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         certificate = await get_owned_or_404(
             session, ComplianceCertificate, certificate_id, auth, what="certificate"
         )
@@ -389,7 +395,7 @@ async def update_certificate(
         resulting row would have an issue date after its expiry date.
     :returns: the updated certificate.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         certificate = await get_owned_or_404(
             session, ComplianceCertificate, certificate_id, auth, what="certificate"
         )
@@ -444,7 +450,7 @@ async def delete_certificate(certificate_id: uuid.UUID, auth: CurrentAuth) -> Re
     :raises HTTPException: 404 if no such certificate exists in their org.
     :returns: an empty 204.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         certificate = await get_owned_or_404(
             session, ComplianceCertificate, certificate_id, auth, what="certificate"
         )

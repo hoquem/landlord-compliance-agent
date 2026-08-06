@@ -38,7 +38,7 @@ from sqlalchemy import select
 
 from src.api.jwks import JwksCache, UnknownSigningKeyError
 from src.db.models import User
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 #: The algorithm Supabase Auth signs **end-user access tokens** with today:
 #: ES256, against a rotating key published at the project's JWKS endpoint.
@@ -237,7 +237,14 @@ async def require_auth(
     except ValueError as exc:
         raise _unauthenticated(f"Bearer token subject is not a UUID: {claims['sub']!r}") from exc
 
-    async with async_session_factory() as session:
+    # Scoped by the token's own subject, which is the only identity we have
+    # at this point -- the org is what we are about to look up. The `users`
+    # policy resolves through `current_org_id()`, a security-definer function,
+    # so a user can always see their own row and there is no chicken-and-egg.
+    #
+    # A user with no row sees nothing rather than someone else's row, so the
+    # 403 below is reached the same way it always was.
+    async with org_session(user_id) as session:
         # ``users.org_id`` is NOT NULL, so a NULL result can only mean
         # "no such row" -- no need to distinguish the two cases.
         org_id = await session.scalar(select(User.org_id).where(User.id == user_id))

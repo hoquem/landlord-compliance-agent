@@ -129,3 +129,22 @@ def _service_role_key() -> str:
             "`uv run --env-file ../.env pytest tests/db/`."
         )
     return key
+
+
+# ---------------------------------------------------------------------------
+# Fixtures borrowed from the api suite, for `test_rls_enforced.py`.
+#
+# That module needs two real orgs to prove one cannot see the other, which is
+# exactly what `make_org_user` builds. Imported rather than written a fourth
+# time -- and `_dispose_app_engine` is named here for the reason its own
+# docstring gives: autouse does not follow a plain import into a sibling
+# conftest, and there are three connection pools now.
+# ---------------------------------------------------------------------------
+from tests.api.conftest import (  # noqa: F401 -- re-exported fixtures
+    OrgUser,
+    _dispose_app_engine,
+    db,
+    make_auth_user,
+    make_org_user,
+    org_user,
+)

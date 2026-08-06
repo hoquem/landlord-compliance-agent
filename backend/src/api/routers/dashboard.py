@@ -12,7 +12,13 @@ unit-tested against all four statutory dates (7 Feb / 7 May / 7 Aug /
 deadline, and the failure mode is a user who files late because the app
 told them the wrong day.
 
-**Every query filters ``org_id``.** ``DATABASE_URL`` is the superuser, so
+**Every query still filters ``org_id``**, and since 2026-08-06 the database
+enforces it too: the API connects as ``app_api``, a role with row-level
+security applied, so an unfiltered query returns *this org's* rows rather than
+everyone's. The filter is now the first of two defences instead of the only
+one -- keep writing it (it is what makes the intent readable, and RLS is a
+backstop, not a design), but a slip is no longer a leak. Proved by
+``tests/db/test_rls_enforced.py``, which queries with no ``where`` at all.
 these filters are the whole tenant boundary -- and a leak here would
 overstate someone's outstanding work with another org's rows.
 
@@ -29,7 +35,7 @@ from src.api.auth import CurrentAuth
 from src.core.certificates import certificate_status, uk_today
 from src.core.quarters import next_update_deadline
 from src.db.models import ComplianceCertificate, Import, Transaction
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["dashboard"])
 
@@ -72,7 +78,7 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
     """
     today = uk_today()
 
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         needs_decision = await session.scalar(
             select(func.count())
             .select_from(Transaction)
@@ -81,6 +87,7 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
                 Transaction.status.in_(("unclassified", "proposed")),
             )
         )
+
         async def count_imports(status: str) -> int:
             return await session.scalar(
                 select(func.count())

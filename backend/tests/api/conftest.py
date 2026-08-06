@@ -43,7 +43,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from src.api.auth import CurrentAuth
-from src.db.session import engine
+from src.db.session import api_engine, engine, worker_engine
 
 # ---------------------------------------------------------------------------
 # Environment and direct DB access (loud reads -- no defaults, no skips).
@@ -398,9 +398,16 @@ async def _dispose_app_engine():
 
     Autouse, and in the shared conftest, so every test module in this
     directory gets it without having to remember to ask.
+
+    **All three engines, since 2026-08-06.** The API connects as an
+    RLS-enforced role and the worker as its own, so there are three pools now
+    and disposing one leaves the other two holding connections bound to a
+    closed loop. Adding an engine without adding it here reproduces the
+    original Task 13a bug exactly.
     """
     yield
-    await engine.dispose()
+    for pool in (engine, api_engine, worker_engine):
+        await pool.dispose()
 
 
 # ---------------------------------------------------------------------------

@@ -58,10 +58,13 @@ Run `make` on its own for the full target list.
    raise at import when their environment is missing, and a collection error
    aborts the whole run. Use `uv run --env-file ../.env pytest` with the stack
    up. This is deliberate fail-loudly behaviour, not a bug — see *Testing*.
-3. **RLS does not protect the API.** `DATABASE_URL` is the `postgres`
-   superuser, so the policies in `0002_rls.sql` are inert on every API path.
-   Manual `org_id` filtering is the entire tenant boundary. `ENGINEERING.md`
-   has the rules that follow from that; read them before writing a router.
+3. **Three database URLs, and mixing them up is silent.** `DATABASE_URL` is
+   the superuser (tests, migrations, `seed_org.py`). `API_DATABASE_URL` is
+   `app_api`, where row-level security applies — point it at the superuser and
+   the tenant boundary disappears with every test still passing except
+   `tests/db/test_rls_enforced.py`. `WORKER_DATABASE_URL` is `app_worker`,
+   which bypasses RLS on purpose. Open API sessions with
+   `org_session(auth.user_id)`, never the raw factory.
 4. **`supabase/config.toml`'s `env()` reads `.env` only when the variable is
    absent from the process environment.** A shell export silently wins, and
    `supabase status` does not validate the auth block. Check the live
@@ -99,7 +102,9 @@ Four ideas carry most of the weight:
   refusal rule and every penny of arithmetic is testable without a stack, and
   `tests/core/` runs with no environment at all.
 - **`org` is the tenant; `entity` is the tax filer.** One org has many
-  entities. Conflating them writes a cross-tenant bug nothing will catch.
+  entities. Conflating them writes a cross-tenant bug — though since the API
+  connects as an RLS-enforced role, the database now catches a forgotten
+  `org_id` filter rather than serving another customer's rows.
 - **Money is attributed by ownership, never by bank account.** Per-entity
   totals derive exclusively from `property_ownership` (HMRC PIM1035);
   `transactions.entity_id` is only the fallback for a line with no property.

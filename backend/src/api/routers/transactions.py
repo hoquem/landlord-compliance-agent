@@ -3,7 +3,13 @@
 The endpoints behind the review screen, and the last point at which a human
 sees a figure before it can reach an export.
 
-**Every query filters ``org_id``**, in the statement or through
+**Every query still filters ``org_id``**, and since 2026-08-06 the database
+enforces it too: the API connects as ``app_api``, a role with row-level
+security applied, so an unfiltered query returns *this org's* rows rather than
+everyone's. The filter is now the first of two defences instead of the only
+one -- keep writing it (it is what makes the intent readable, and RLS is a
+backstop, not a design), but a slip is no longer a leak. Proved by
+``tests/db/test_rls_enforced.py``, which queries with no ``where`` at all.
 :func:`~src.api.scoping.get_owned_or_404`. ``DATABASE_URL`` is the
 ``postgres`` superuser, so the RLS policies of ``0002_rls.sql`` are inert on
 this path; the filters are the entire tenant boundary. See
@@ -44,7 +50,7 @@ from src.api.scoping import get_owned_or_404
 from src.core.categories import HmrcCategory
 from src.core.splits import InvalidOwnershipError, split_amount
 from src.db.models import Property, PropertyOwnership, Transaction
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["transactions"])
 
@@ -217,7 +223,7 @@ async def list_transactions(
     :param status_filter: restrict to one status; sent as ``?status=``.
     :returns: matching transactions in their org, and only those.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         stmt = select(Transaction).where(Transaction.org_id == auth.org_id)
         if import_id is not None:
             stmt = stmt.where(Transaction.import_id == import_id)
@@ -246,7 +252,7 @@ async def confirm_batch(body: ConfirmBatchBody, auth: CurrentAuth) -> list[Trans
         caller's; 422 if any line fails validation.
     :returns: the confirmed transactions, in request order.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         updated: list[TransactionRead] = []
         for item in body.items:
             txn = await get_owned_or_404(
@@ -270,7 +276,7 @@ async def confirm_transaction(
         caller's; 422 if the property's ownership cannot apportion it.
     :returns: the confirmed transaction.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         txn = await get_owned_or_404(
             session, Transaction, transaction_id, auth, what="transaction"
         )
@@ -291,7 +297,7 @@ async def exclude_transaction(transaction_id: uuid.UUID, auth: CurrentAuth) -> T
     :raises HTTPException: 404 if the transaction is not the caller's.
     :returns: the excluded transaction.
     """
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         txn = await get_owned_or_404(
             session, Transaction, transaction_id, auth, what="transaction"
         )

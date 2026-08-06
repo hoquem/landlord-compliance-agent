@@ -1,6 +1,12 @@
 """Generating a quarter's export pack -- the figures a return is filed from.
 
-**Every query filters ``org_id``**, in the statement or through
+**Every query still filters ``org_id``**, and since 2026-08-06 the database
+enforces it too: the API connects as ``app_api``, a role with row-level
+security applied, so an unfiltered query returns *this org's* rows rather than
+everyone's. The filter is now the first of two defences instead of the only
+one -- keep writing it (it is what makes the intent readable, and RLS is a
+backstop, not a design), but a slip is no longer a leak. Proved by
+``tests/db/test_rls_enforced.py``, which queries with no ``where`` at all.
 :func:`~src.api.scoping.get_owned_or_404`. ``DATABASE_URL`` is the
 ``postgres`` superuser, so the RLS policies of ``0002_rls.sql`` and
 ``0004_exports_bucket.sql`` are inert here; the filters and the
@@ -98,7 +104,7 @@ from src.db.models import (
     PropertyOwnership,
     Transaction,
 )
-from src.db.session import async_session_factory
+from src.db.session import org_session
 
 router = APIRouter(tags=["exports"])
 
@@ -333,7 +339,7 @@ async def export_quarter(body: ExportQuarterBody, auth: CurrentAuth) -> ExportRe
     except ValueError as exc:
         raise _unprocessable(str(exc)) from exc
 
-    async with async_session_factory() as session:
+    async with org_session(auth.user_id) as session:
         entity = await get_owned_or_404(session, Entity, body.entity_id, auth, what="entity")
         export_entity = ExportEntity(
             id=entity.id, name=entity.name, tax_regime=entity.tax_regime

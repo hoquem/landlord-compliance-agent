@@ -8,9 +8,12 @@ credentials, and -- most importantly -- the construction of the object path.
 caller's job.** Objects live at ``{bucket}/{org_id}/...`` and the policies
 in ``supabase/migrations/0003_storage.sql`` and ``0004_exports_bucket.sql``
 key on that first segment. Those policies protect the direct-from-Flutter
-path only: the API connects as the ``postgres`` superuser (see
-``DATABASE_URL``) and bypasses RLS entirely, so on this path the prefix is
-exactly as trustworthy as the code below. Hence the interface takes
+path only: uploads here go through the service-role key, which bypasses them,
+so on this path the prefix is exactly as trustworthy as the code below.
+
+**Storage did not get the database's guarantee.** The ledger's tenant boundary
+became a row-level-security policy on 2026-08-06; object paths have no
+equivalent, so this module is still the whole of it. Hence the interface takes
 ``org_id`` and a *filename*, never a path, and reduces the filename to a
 bare leaf name before using it. A caller cannot ask for a path, so a caller
 cannot ask for the wrong one.
