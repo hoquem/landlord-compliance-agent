@@ -146,6 +146,28 @@ async def call_whoami(headers: dict[str, str] | None = None) -> httpx.Response:
         return await client.get("/whoami", headers=headers)
 
 
+async def real_access_token(org_user: "OrgUser") -> str:
+    """Ask Supabase Auth for a genuine access token, via the password grant.
+
+    The only place in this suite that gets a token the way the browser does.
+    Everything else mints its own, which is faster, offline, and the only way
+    to produce the negative cases -- but it also meant nothing noticed when
+    the stack moved to ES256 and every real token started being refused.
+
+    :param org_user: whose token to fetch.
+    :returns: the raw access token, signed however Supabase currently signs.
+    """
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{_env('SUPABASE_URL')}/auth/v1/token",
+            params={"grant_type": "password"},
+            headers={"apikey": _env("SUPABASE_ANON_KEY")},
+            json={"email": org_user.email, "password": org_user.password},
+        )
+    assert resp.status_code == 200, f"password grant failed: {resp.status_code} {resp.text}"
+    return resp.json()["access_token"]
+
+
 async def get_whoami(token: str) -> tuple[int, dict]:
     """Call ``/whoami`` in-process with ``token`` as the bearer credentials.
 
@@ -163,10 +185,15 @@ class AuthUser:
     :ivar user_id: the ``auth.users.id``, i.e. what a Supabase access token
         carries in ``sub``.
     :ivar email: the address the user was created with.
+    :ivar password: what it was created with, so a test can ask Supabase for
+        a **real** access token via the password grant. Everything else in
+        this suite mints its own; the one test that must not is the one
+        checking we accept what Supabase actually issues.
     """
 
     user_id: uuid.UUID
     email: str
+    password: str
 
 
 @dataclass(frozen=True)
@@ -176,10 +203,14 @@ class OrgUser:
     :ivar user_id: the ``auth.users.id`` / ``public.users.id`` value, which
         is what a Supabase access token carries in ``sub``.
     :ivar org_id: the ``orgs.id`` the user's ``public.users`` row points at.
+    :ivar email: the address the auth user was created with.
+    :ivar password: carried through so a test can obtain a real token.
     """
 
     user_id: uuid.UUID
     org_id: uuid.UUID
+    email: str
+    password: str
 
 
 #: Every org-scoped table, ordered so that deleting them in sequence never
@@ -220,14 +251,15 @@ async def _create_auth_user() -> AuthUser:
     """
     suffix = uuid.uuid4().hex
     email = f"api-test-{suffix}@example.com"
+    password = f"Test-Password-{suffix}!"
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{_env('SUPABASE_URL')}/auth/v1/admin/users",
             headers=_admin_headers(),
-            json={"email": email, "password": f"Test-Password-{suffix}!", "email_confirm": True},
+            json={"email": email, "password": password, "email_confirm": True},
         )
     assert resp.status_code == 200, f"admin create user failed: {resp.status_code} {resp.text}"
-    return AuthUser(user_id=uuid.UUID(resp.json()["id"]), email=email)
+    return AuthUser(user_id=uuid.UUID(resp.json()["id"]), email=email, password=password)
 
 
 async def _delete_auth_user(user_id: uuid.UUID) -> None:
@@ -324,7 +356,12 @@ async def make_org_user(make_auth_user):
                 org_id,
                 user.email,
             )
-        org_user = OrgUser(user_id=user.user_id, org_id=org_id)
+        org_user = OrgUser(
+            user_id=user.user_id,
+            org_id=org_id,
+            email=user.email,
+            password=user.password,
+        )
         created.append(org_user)
         return org_user
 

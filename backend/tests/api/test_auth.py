@@ -13,12 +13,30 @@ add. See that module's docstring for why tokens are hand-minted rather than
 fetched from Supabase Auth's password grant.
 """
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 import uuid
 
+import jwt as pyjwt
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.security import HTTPAuthorizationCredentials
 
+from src.api import auth as auth_module
 from src.api.auth import AuthContext, require_auth
-from tests.api.conftest import OrgUser, call_whoami, db, get_whoami, mint_token
+from src.api.jwks import UnknownSigningKeyError
+from tests.api.conftest import (
+    OrgUser,
+    call_whoami,
+    db,
+    get_whoami,
+    mint_token,
+    real_access_token,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -220,3 +238,199 @@ async def test_valid_token_is_403_once_the_users_row_is_gone(org_user: OrgUser) 
 
     status_code, body = await get_whoami(token)
     assert status_code == 403, body
+
+
+# ---------------------------------------------------------------------------
+# ES256 -- how Supabase actually signs an access token.
+#
+# Everything above this line uses a hand-minted HS256 token against the shared
+# secret, which is fast, offline, and produces the negative cases. None of it
+# noticed that the live stack had moved to ES256 and that every real token was
+# being refused with a 401. These tests are the ones that would have.
+#
+# The key material here is generated in-process and handed to the app through
+# a stub JWKS cache, so there is still no network -- but the *algorithm* and
+# the key *type* are the real ones.
+# ---------------------------------------------------------------------------
+ES256_KID = "test-signing-key"
+
+
+def es256_keypair():
+    """A throwaway P-256 pair, the curve Supabase signs with."""
+    private = ec.generate_private_key(ec.SECP256R1())
+    jwk = pyjwt.algorithms.ECAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    jwk.update({"kid": ES256_KID, "alg": "ES256", "use": "sig"})
+    return private, jwk
+
+
+def mint_es256(private_key, subject, *, kid: str = ES256_KID, **overrides) -> str:
+    """Sign a token the way Supabase Auth does: ES256, with a ``kid`` header."""
+    now = int(time.time())
+    claims = {
+        "sub": str(subject),
+        "aud": "authenticated",
+        "role": "authenticated",
+        "iat": now,
+        "exp": now + 3600,
+    }
+    claims.update(overrides)
+    return pyjwt.encode(claims, private_key, algorithm="ES256", headers={"kid": kid})
+
+
+class StubJwks:
+    """Serves a fixed JWK, so these tests need no Supabase and no network."""
+
+    def __init__(self, jwk: dict | None) -> None:
+        self._jwk = jwk
+
+    async def jwk_for(self, kid: str) -> dict:
+        if self._jwk is None or kid != self._jwk["kid"]:
+            raise UnknownSigningKeyError(f"no signing key {kid!r}")
+        return self._jwk
+
+
+@pytest.fixture
+def es256(monkeypatch: pytest.MonkeyPatch):
+    """Point the auth dependency at a JWKS we control, and hand back the signer."""
+    private, jwk = es256_keypair()
+    monkeypatch.setattr(auth_module, "_jwks", StubJwks(jwk))
+    return private
+
+
+async def test_a_real_shaped_es256_token_is_accepted(org_user: OrgUser, es256) -> None:
+    """**The blocker this change exists for.**
+
+    Supabase signs end-user tokens ES256 against a rotating key. Before this,
+    the API accepted HS256 only and answered every real session with
+    ``Invalid bearer token: The specified alg value is not allowed``.
+    """
+    status_code, body = await get_whoami(mint_es256(es256, org_user.user_id))
+
+    assert status_code == 200, body
+    assert body["user_id"] == str(org_user.user_id)
+    assert body["org_id"] == str(org_user.org_id)
+
+
+async def test_a_token_signed_by_a_different_key_is_401(org_user: OrgUser, es256) -> None:
+    """Right algorithm, right ``kid``, wrong private key."""
+    impostor = ec.generate_private_key(ec.SECP256R1())
+
+    status_code, _ = await get_whoami(mint_es256(impostor, org_user.user_id))
+
+    assert status_code == 401
+
+
+async def test_a_token_with_an_unknown_kid_is_401(org_user: OrgUser, es256) -> None:
+    """An unpublished key id cannot be verified, so it is not trusted."""
+    status_code, _ = await get_whoami(
+        mint_es256(es256, org_user.user_id, kid="some-other-key")
+    )
+
+    assert status_code == 401
+
+
+async def test_an_es256_token_with_no_kid_is_401(org_user: OrgUser, es256) -> None:
+    """Without a ``kid`` there is no way to choose a key, and guessing is not one."""
+    now = int(time.time())
+    token = pyjwt.encode(
+        {"sub": str(org_user.user_id), "aud": "authenticated", "exp": now + 3600},
+        es256,
+        algorithm="ES256",
+    )
+
+    assert (await get_whoami(token))[0] == 401
+
+
+async def test_the_public_key_cannot_be_used_as_an_hmac_secret(
+    org_user: OrgUser, es256
+) -> None:
+    """**The algorithm-confusion attack, and the reason for strict binding.**
+
+    The EC public key is public -- it is published in the JWKS. If the token's
+    ``alg`` header were allowed to choose the verification method, an attacker
+    could take those public bytes, sign ``alg: HS256`` with them as the shared
+    secret, and be verified as anyone. The defence is that a JWKS key may only
+    ever verify ES256 and the shared secret may only ever verify HS256; the
+    two key sources never cross.
+
+    **The token is forged by hand, not with PyJWT.** PyJWT refuses to *encode*
+    with an asymmetric key under HS256 ("should not be used as an HMAC
+    secret") -- welcome defence in depth, but an attacker has no such
+    scruples, and a test that leaned on it would be asserting PyJWT's
+    behaviour rather than ours.
+    """
+    public_pem = es256.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+    def b64(raw: bytes) -> bytes:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+    now = int(time.time())
+    header = b64(json.dumps({"alg": "HS256", "typ": "JWT", "kid": ES256_KID}).encode())
+    payload = b64(
+        json.dumps(
+            {"sub": str(org_user.user_id), "aud": "authenticated", "exp": now + 3600}
+        ).encode()
+    )
+    signing_input = header + b"." + payload
+    signature = b64(hmac.new(public_pem, signing_input, hashlib.sha256).digest())
+    forged = (signing_input + b"." + signature).decode()
+
+    status_code, _ = await get_whoami(forged)
+
+    assert status_code == 401, "the public key must never be usable as an HMAC secret"
+
+
+async def test_hs256_still_works_while_the_shared_secret_is_configured(
+    org_user: OrgUser, es256
+) -> None:
+    """Both paths live at once, which is what keeps the rest of this suite offline.
+
+    Supabase is mid-migration: the anon and service-role keys are still HS256
+    JWTs signed with this secret. Local and CI set it; a cloud deployment that
+    omits it gets ES256 only.
+    """
+    status_code, body = await get_whoami(mint_token(org_user.user_id))
+
+    assert status_code == 200, body
+
+
+async def test_hs256_is_refused_when_no_shared_secret_is_configured(
+    org_user: OrgUser, es256, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting the secret is how a deployment turns the legacy path off.
+
+    Without this, "we are ES256-only in production" would be a claim with
+    nothing behind it.
+    """
+    token = mint_token(org_user.user_id)
+    monkeypatch.setattr(auth_module, "_SECRET", None)
+
+    status_code, _ = await get_whoami(token)
+
+    assert status_code == 401
+
+
+async def test_a_token_supabase_actually_issued_is_accepted(org_user: OrgUser) -> None:
+    """**The test whose absence let the app ship unable to authenticate.**
+
+    No stub: a real password grant against the running stack, verified
+    against the real JWKS endpoint over real HTTP. Every other test in this
+    file mints its own token, which is why all seventeen of them stayed green
+    while the live stack moved to ES256 and refused every browser session.
+
+    The algorithm is asserted rather than assumed. If Supabase moves again,
+    this test should fail loudly on the *reason* rather than quietly keep
+    passing against something else.
+    """
+    token = await real_access_token(org_user)
+    header = pyjwt.get_unverified_header(token)
+    assert header["alg"] == "ES256", f"Supabase is now issuing {header['alg']}"
+
+    status_code, body = await get_whoami(token)
+
+    assert status_code == 200, body
+    assert body["user_id"] == str(org_user.user_id)
+    assert body["org_id"] == str(org_user.org_id)

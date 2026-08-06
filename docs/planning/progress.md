@@ -1,5 +1,78 @@
 # Progress Log
 
+## Session 2026-08-06 — ES256, and the last blocker closed
+
+**A real Supabase-issued token now authenticates.** Verified end to end: a
+password grant against the live stack returns an `alg: ES256` token, the API
+fetches the signing key from the project's real JWKS endpoint, and the browser
+renders live data with no hand-minted token anywhere. 494 backend tests, 113
+Flutter, ruff and analyze clean.
+
+### The design
+
+ES256 against the published JWKS is always on. **HS256 is opt-in by the
+presence of `SUPABASE_JWT_SECRET`** — local and CI set it, so the ~160
+existing test call sites keep minting offline; a cloud deployment omits it and
+is ES256-only. That makes "we are ES256-only in production" a claim with a
+mechanism behind it rather than an intention.
+
+**The algorithm is bound to the key source, never read from the token.** This
+is the whole security argument. The EC public key is *published*, so if the
+`alg` header could select the verification method, an attacker could sign
+`alg: HS256` using those public bytes as the HMAC secret and be verified as
+anyone. So: a JWKS key verifies ES256 only; the shared secret verifies HS256
+only; the header picks a branch, and neither branch can be reached with the
+other's key material.
+
+`src/api/jwks.py` is a small async cache rather than PyJWT's `PyJWKClient`,
+which is synchronous — a cache miss inside the auth dependency would block the
+event loop for a whole round-trip and serialise every other request behind it.
+Three properties, each separately tested: **fail closed** (no key means
+reject), **survive an outage** (a warm cache keeps working when Supabase Auth
+is down, so their downtime is not our lockout), and **do not hammer** — `kid`
+is attacker-controlled, so twenty forged ones cost one refetch per cooldown
+window rather than twenty.
+
+### Two things the tests got wrong before they got right
+
+**The attack test could not be written with PyJWT.** `pyjwt.encode` refuses an
+asymmetric key under HS256 — welcome defence in depth, but the test was
+failing at *forge* time, so it proved PyJWT's behaviour rather than ours. The
+token is now hand-built: base64url header and payload, HMAC-SHA256 with the
+public key bytes. An attacker has no such scruples.
+
+**Four JWKS tests asserted the wrong counts**, because the initial cold-cache
+fetch starts the cooldown and a frozen clock then blocks the refetch. The
+design was right — production never has a frozen clock — but the tests had
+conflated "does a miss refetch?" with "does the cooldown hold?". Split into
+separate tests with `cooldown=0` for the first question.
+
+### The mutation that survived, and why that is fine
+
+Replacing the per-branch algorithm allowlist with `algorithms=[algorithm]`
+passed everything. That is not a weak test: by that line the if/elif has
+already constrained `algorithm` to exactly one value, so the two are
+equivalent. The branch structure *is* the guard and the allowlist is
+belt-and-braces. Recorded because "a mutation survived" normally means the
+opposite.
+
+The two that did die, each killing exactly one test: letting the `alg` header
+choose the key (kills the confusion test), and falling back to HS256 when the
+JWKS has no key (kills the unknown-kid test).
+
+### The test whose absence caused this
+
+`test_a_token_supabase_actually_issued_is_accepted` — a real password grant,
+no stub, verified against the real JWKS over real HTTP. Every other test in
+that file mints its own token, which is why all seventeen stayed green while
+the live stack moved to ES256 and refused every browser session. It asserts
+the algorithm explicitly, so the next migration fails loudly on the reason
+rather than quietly passing against something else.
+
+**Next:** one real quarter on Mahmud's own statements — the validation gate,
+now unblocked for the first time.
+
+
 ## Session 2026-08-05 (cont.) — CORS, and one blocker down
 
 **The Flutter app now talks to the API for real, with no proxy.** Verified in
