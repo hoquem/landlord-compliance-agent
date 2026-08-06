@@ -293,6 +293,11 @@ class PropertyRead(BaseModel):
     postcode: str
     country: str
     finance_cost_classification: FinanceCostClassification
+    #: The review screen reads this to decide whether a finance cost on this
+    #: property needs its interest recorded before it can be confirmed. Its
+    #: absence here is invisible in the API and shows up as a missing input
+    #: in the browser, which is how it was found.
+    mortgage_type: MortgageType
     epc_rating: str | None
     epc_expiry: datetime.date | None
     bedroom_count: int | None

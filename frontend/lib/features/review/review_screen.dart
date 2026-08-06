@@ -43,6 +43,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
   List<PropertyRef> _properties = <PropertyRef>[];
   List<String> _categories = <String>[];
   final Set<String> _selected = <String>{};
+
+  /// Interest inputs, one per repayment-mortgage row.
+  ///
+  /// Held here and not built in `build`: a `TextEditingController` created
+  /// during a rebuild resets the cursor on every keystroke, which the
+  /// ownership editor already paid for once.
+  final Map<String, TextEditingController> _interest =
+      <String, TextEditingController>{};
   final Map<String, String> _overrides = <String, String>{};
   String? _error;
   bool _busy = false;
@@ -87,16 +95,65 @@ class _ReviewScreenState extends State<ReviewScreen> {
     return sorted;
   }
 
+  @override
+  void dispose() {
+    for (final TextEditingController c in _interest.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   String? _categoryFor(Txn txn) => _overrides[txn.id] ?? txn.hmrcCategory;
+
+  /// Whether this line's payment mixes allowable interest with capital.
+  ///
+  /// True only for a finance cost on a property whose borrowing is a
+  /// repayment mortgage. The backend refuses to export such a line without
+  /// an interest figure, so collecting it here is what stops that refusal
+  /// being a dead end.
+  bool _needsInterest(Txn txn) {
+    if (!kFinanceCostCategories.contains(_categoryFor(txn))) return false;
+    final PropertyRef? property = _propertyFor(txn);
+    return property != null && property.needsInterestSplit;
+  }
+
+  TextEditingController _interestController(Txn txn) =>
+      _interest.putIfAbsent(txn.id, TextEditingController.new);
+
+  /// The interest figure for a row, or `null` if it is missing or unusable.
+  ///
+  /// Returns `null` rather than throwing on nonsense: the row simply stays
+  /// unconfirmable, and [_interestProblem] is what explains why.
+  String? _interestFor(Txn txn) {
+    final String raw = (_interest[txn.id]?.text ?? '').trim();
+    if (raw.isEmpty) return null;
+    final double? value = double.tryParse(raw);
+    if (value == null || value <= 0 || value > txn.amount) return null;
+    return raw;
+  }
+
+  /// What to tell the user about an interest figure they have started typing.
+  String? _interestProblem(Txn txn) {
+    final String raw = (_interest[txn.id]?.text ?? '').trim();
+    if (raw.isEmpty) return null;
+    final double? value = double.tryParse(raw);
+    if (value == null) return 'That is not a number.';
+    if (value <= 0) return 'The interest has to be more than nothing.';
+    if (value > txn.amount) return 'That is more than the payment.';
+    return null;
+  }
 
   /// Selected lines that actually have a category to confirm.
   List<ConfirmItem> get _confirmable => <ConfirmItem>[
     for (final Txn txn in _txns ?? <Txn>[])
-      if (_selected.contains(txn.id) && _categoryFor(txn) != null)
+      if (_selected.contains(txn.id) &&
+          _categoryFor(txn) != null &&
+          (!_needsInterest(txn) || _interestFor(txn) != null))
         ConfirmItem(
           transactionId: txn.id,
           hmrcCategory: _categoryFor(txn)!,
           propertyId: txn.propertyId,
+          allowableAmount: _needsInterest(txn) ? _interestFor(txn) : null,
         ),
   ];
 
@@ -194,6 +251,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
               category: _categoryFor(txn),
               property: _propertyFor(txn),
               selected: _selected.contains(txn.id),
+              interestController: _needsInterest(txn)
+                  ? _interestController(txn)
+                  : null,
+              interestProblem: _interestProblem(txn),
+              interestSettled: !_needsInterest(txn) || _interestFor(txn) != null,
+              onInterestChanged: () => setState(() {}),
               onToggle: () => setState(() {
                 if (!_selected.remove(txn.id)) _selected.add(txn.id);
               }),
@@ -230,6 +293,10 @@ class _ReviewRow extends StatelessWidget {
     required this.property,
     required this.selected,
     required this.onToggle,
+    required this.interestController,
+    required this.interestProblem,
+    required this.interestSettled,
+    required this.onInterestChanged,
     required this.onPickCategory,
   });
 
@@ -238,6 +305,12 @@ class _ReviewRow extends StatelessWidget {
   final PropertyRef? property;
   final bool selected;
   final VoidCallback onToggle;
+
+  /// Non-null only when this payment mixes interest with capital.
+  final TextEditingController? interestController;
+  final String? interestProblem;
+  final bool interestSettled;
+  final VoidCallback onInterestChanged;
   final void Function(BuildContext anchor) onPickCategory;
 
   bool get _uncertain =>
@@ -272,7 +345,10 @@ class _ReviewRow extends StatelessWidget {
             children: <Widget>[
               Checkbox(
                 value: selected,
-                onChanged: settled ? null : (_) => onToggle(),
+                // Unconfirmable until the split is supplied. Refusing here,
+                // where it is fixable, beats refusing at export where it is a
+                // dead end -- PRODUCT.md: "make refusal feel like protection".
+                onChanged: settled || !interestSettled ? null : (_) => onToggle(),
               ),
               const SizedBox(width: Spacing.sm),
               SizedBox(
@@ -332,6 +408,12 @@ class _ReviewRow extends StatelessWidget {
                             color: palette.textMuted,
                           ),
                         ),
+                        if (interestController != null)
+                          _InterestSplit(
+                            controller: interestController!,
+                            problem: interestProblem,
+                            onChanged: onInterestChanged,
+                          ),
                       ],
                     ),
                   ),
@@ -419,6 +501,78 @@ class _QueueCleared extends StatelessWidget {
         style: Theme.of(
           context,
         ).textTheme.displaySmall?.copyWith(color: palette.textBody),
+      ),
+    );
+  }
+}
+
+
+/// The interest figure for a repayment-mortgage payment.
+///
+/// **Why this exists at all.** A repayment mortgage leaves the account as one
+/// direct debit that is part interest and part capital. Only the interest is
+/// an allowable expense; the capital repays a loan. The bank line carries one
+/// number and nothing in the system can derive the split — a stored ratio
+/// would be wrong every month as the balance amortises — so it has to come
+/// from the lender's statement, which means from a person.
+///
+/// Inline rather than a popover, unlike the category picker: this is a figure
+/// you copy off another document while looking at the row, not a choice from
+/// a list, and hiding it behind a tap would make you lose your place.
+class _InterestSplit extends StatelessWidget {
+  const _InterestSplit({
+    required this.controller,
+    required this.problem,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final String? problem;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+    final StatusColors colors = Theme.of(context).extension<StatusColors>()!;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: Spacing.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          SizedBox(
+            width: 118,
+            child: TextField(
+              controller: controller,
+              onChanged: (_) => onChanged(),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: AppType.numeric.copyWith(color: palette.textHigh),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Interest',
+                hintStyle: AppType.meta.copyWith(color: palette.textMuted),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: Spacing.sm,
+                  vertical: Spacing.sm,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: Spacing.sm),
+          Flexible(
+            child: Text(
+              // States the fact, then what to do about it. Never scolds: the
+              // agent was right about the category, and the user has done
+              // nothing wrong by not knowing a figure only the lender holds.
+              problem ??
+                  'Repayment mortgage — only the interest is allowable. '
+                      'Enter it from your lender statement.',
+              style: AppType.meta.copyWith(
+                color: problem == null ? palette.textMuted : colors.wrong,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

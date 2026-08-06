@@ -435,4 +435,106 @@ void main() {
       expect(find.text('Repairs maintenance'), findsNothing);
     });
   });
+
+  group('Repayment mortgages', () {
+    // A repayment mortgage's direct debit is part interest, part capital, and
+    // only the interest is allowable. The bank line is one number, so the
+    // figure has to come from a human — and the export refuses without it.
+    // The screen's job is to make that resolvable here rather than at the
+    // point of being refused. Found on real data, 2026-08-06.
+    FakeApiClient repaymentApi() => FakeApiClient()
+      ..properties = <PropertyRef>[
+        const PropertyRef(id: 'p1', label: '59 Sample Rise', mortgageType: 'repayment'),
+      ]
+      ..txns = <Txn>[
+        aTxn(
+          id: 'm1',
+          description: 'ONESAVINGS BANK DIRECT DEBIT',
+          amount: 1250.00,
+          direction: 'out',
+          category: 'finance_costs_residential',
+          propertyId: 'p1',
+          confidence: 0.85,
+        ),
+      ];
+
+    testWidgets('the row says why it cannot be confirmed yet', (tester) async {
+      await pumpReview(tester, repaymentApi());
+
+      expect(find.textContaining('interest'), findsWidgets);
+      expect(find.byType(TextField), findsOneWidget);
+    });
+
+    testWidgets('it cannot be selected until an interest figure is given', (
+      tester,
+    ) async {
+      // PRODUCT.md: "Refusing is a feature, so make refusal feel like
+      // protection." Refusing here, where it is fixable, beats refusing at
+      // export where it is a dead end.
+      await pumpReview(tester, repaymentApi());
+
+      final Checkbox box = tester.widget(find.byType(Checkbox).first);
+      expect(box.onChanged, isNull, reason: 'unconfirmable until split');
+    });
+
+    testWidgets('entering the interest makes the row confirmable', (
+      tester,
+    ) async {
+      await pumpReview(tester, repaymentApi());
+
+      await tester.enterText(find.byType(TextField), '412.55');
+      await tester.pump();
+
+      final Checkbox box = tester.widget(find.byType(Checkbox).first);
+      expect(box.onChanged, isNotNull);
+    });
+
+    testWidgets('an interest figure above the payment is refused', (
+      tester,
+    ) async {
+      // The database CHECK would reject it anyway; catching it here means the
+      // user finds out while they are looking at the number, not afterwards.
+      await pumpReview(tester, repaymentApi());
+
+      await tester.enterText(find.byType(TextField), '2000.00');
+      await tester.pump();
+
+      final Checkbox box = tester.widget(find.byType(Checkbox).first);
+      expect(box.onChanged, isNull);
+      expect(find.textContaining('more than the payment'), findsOneWidget);
+    });
+
+    testWidgets('the interest is sent with the confirmation', (tester) async {
+      final FakeApiClient api = repaymentApi();
+      await pumpReview(tester, api);
+
+      await tester.enterText(find.byType(TextField), '412.55');
+      await tester.pump();
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pump();
+      await tester.tap(find.textContaining('Confirm'));
+      await tester.pumpAndSettle();
+
+      expect(api.confirmBatches.single.single.allowableAmount, '412.55');
+    });
+
+    testWidgets('an interest-only property needs no figure', (tester) async {
+      // The whole payment is interest, so there is nothing to separate and
+      // the screen must not invent work.
+      final FakeApiClient api = repaymentApi()
+        ..properties = <PropertyRef>[
+          const PropertyRef(
+            id: 'p1',
+            label: '59 Sample Rise',
+            mortgageType: 'interest_only',
+          ),
+        ];
+
+      await pumpReview(tester, api);
+
+      expect(find.byType(TextField), findsNothing);
+      final Checkbox box = tester.widget(find.byType(Checkbox).first);
+      expect(box.onChanged, isNotNull);
+    });
+  });
 }

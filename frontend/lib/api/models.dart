@@ -110,7 +110,11 @@ class Entity {
 
 /// One property, as the review screen needs it.
 class PropertyRef {
-  const PropertyRef({required this.id, required this.label});
+  const PropertyRef({
+    required this.id,
+    required this.label,
+    this.mortgageType = 'none',
+  });
 
   factory PropertyRef.fromJson(Map<String, dynamic> json) => PropertyRef(
     id: json['id'] as String,
@@ -118,10 +122,20 @@ class PropertyRef {
       json['address_line1'] as String?,
       json['postcode'] as String?,
     ].whereType<String>().join(', '),
+    mortgageType: json['mortgage_type'] as String? ?? 'none',
   );
 
   final String id;
   final String label;
+
+  /// `none`, `interest_only` or `repayment`. Only `repayment` changes
+  /// anything: a payment on such a property is part interest and part
+  /// capital, and only the interest is an allowable expense — so the review
+  /// screen has to collect the split before the line can be confirmed.
+  final String mortgageType;
+
+  /// Whether a finance cost on this property needs its interest recorded.
+  bool get needsInterestSplit => mortgageType == 'repayment';
 }
 
 /// One transaction, at whatever stage of review it has reached.
@@ -205,6 +219,18 @@ class Txn {
 /// it is "look here first", and tinting it would collide with the status
 /// vocabulary and imply the agent erred by being unsure.
 const double kLowConfidence = 0.8;
+
+/// Categories whose payment can contain non-deductible capital.
+///
+/// Only borrowing does: a repayment mortgage's direct debit is part interest
+/// and part loan principal, and only the interest is allowable. Mirrors
+/// `FINANCE_COST_CATEGORIES` in `core/export_pack.py`, which is what actually
+/// refuses the export — this copy exists so the review screen can collect the
+/// figure *before* that refusal, rather than leaving the user at a dead end.
+const Set<String> kFinanceCostCategories = <String>{
+  'finance_costs_residential',
+  'finance_costs_nonresidential',
+};
 
 /// What is waiting on the user, from `GET /dashboard`.
 ///

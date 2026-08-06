@@ -1561,3 +1561,49 @@ async def test_another_orgs_ownership_is_not_readable(make_org_user) -> None:
     )
 
     assert resp.status_code == 404, resp.text
+
+
+async def test_a_property_reports_its_mortgage_type(org_user: OrgUser) -> None:
+    """The review screen cannot ask for an interest split without this.
+
+    A repayment mortgage's payment is part interest and part capital, and the
+    export refuses it unsplit -- but only the *property* knows which mortgages
+    are repayment. Omitting the field from ``PropertyRead`` is invisible from
+    the backend: every test passes, the export still guards correctly, and the
+    input simply never appears in the browser. That is how it happened.
+    """
+    created = await as_user(
+        org_user,
+        "POST",
+        "/properties",
+        {
+            "address_line1": "1 Sample Street",
+            "city": "Luton",
+            "postcode": "LU1 1AA",
+            "finance_cost_classification": "residential",
+            "mortgage_type": "repayment",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["mortgage_type"] == "repayment"
+
+    listed = await as_user(org_user, "GET", "/properties")
+
+    assert listed.json()[0]["mortgage_type"] == "repayment"
+
+
+async def test_a_property_defaults_to_no_mortgage(org_user: OrgUser) -> None:
+    """So the column changes no existing behaviour until someone opts in."""
+    created = await as_user(
+        org_user,
+        "POST",
+        "/properties",
+        {
+            "address_line1": "2 Sample Street",
+            "city": "Luton",
+            "postcode": "LU1 1AA",
+            "finance_cost_classification": "residential",
+        },
+    )
+
+    assert created.json()["mortgage_type"] == "none"

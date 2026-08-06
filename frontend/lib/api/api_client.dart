@@ -35,6 +35,7 @@ class ConfirmItem {
     required this.transactionId,
     required this.hmrcCategory,
     this.propertyId,
+    this.allowableAmount,
   });
 
   final String transactionId;
@@ -44,10 +45,20 @@ class ConfirmItem {
   /// `use_of_home_allowance` is the standing example.
   final String? propertyId;
 
+  /// The part of the payment that is actually allowable, as a decimal string.
+  ///
+  /// Sent for a repayment mortgage, where the direct debit is part interest
+  /// and part capital and only the interest is deductible. `null` means the
+  /// whole amount, which is every ordinary line. Kept as a string so it
+  /// reaches the API at the precision the user typed — a double would
+  /// introduce binary rounding into a tax figure.
+  final String? allowableAmount;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'transaction_id': transactionId,
     'hmrc_category': hmrcCategory,
     'property_id': propertyId,
+    if (allowableAmount != null) 'allowable_amount': allowableAmount,
   };
 }
 

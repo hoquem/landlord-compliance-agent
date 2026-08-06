@@ -1,5 +1,57 @@
 # Progress Log
 
+## Session 2026-08-06 (cont.) — the interest split, in the UI
+
+**The refusal is now resolvable where it happens.** 510 backend tests, 119
+Flutter, ruff and analyze clean. Driven on the real quarter: typing `1500`
+against a £1,324.35 payment reads *"That is more than the payment."* and the
+row stays unconfirmable; `412.55` unlocks it, and the figure reaches the
+database as `allowable_amount`.
+
+Inline rather than a popover, unlike the category picker. This is a number you
+copy off another document while looking at the row, not a choice from a list —
+hiding it behind a tap would make you lose your place. The controller lives in
+screen state, not in `build`, which the ownership editor already paid for once.
+
+The copy states the fact then what to do: *"Repayment mortgage — only the
+interest is allowable. Enter it from your lender statement."* It never scolds.
+The agent was right about the category, and the user has done nothing wrong by
+not knowing a figure only the lender holds.
+
+### The bug the browser found, and the shape of it
+
+The input did not appear at first. The bundle knew about `mortgage_type`; the
+**API was not returning it**. `PropertyRead` had never gained the field.
+
+The interesting part is *how* it survived. My edit script did:
+
+    s.replace("finance_cost_classification: str\n", ...)
+
+but the annotation is `finance_cost_classification: FinanceCostClassification`.
+The replace matched nothing, the write succeeded, and the script printed
+**"PropertyRead extended"**. A no-op that reported as done — the same class of
+error as a test that pins a bug, and invisible to every backend test, because
+the export guard still worked perfectly and only the browser could see the
+missing input.
+
+Fixed, and `test_a_property_reports_its_mortgage_type` now pins it. Two habits
+worth keeping: assert the replacement actually changed something, and treat a
+field the frontend depends on as needing its own test rather than trusting it
+rode along.
+
+### Mutations
+
+Three, each killing exactly what it should: the checkbox no longer waiting for
+the figure (2 tests), an interest above the payment being accepted (1), and
+the figure being computed but never sent (1).
+
+### A small UX nit, not fixed
+
+After typing in the field, the first click on the checkbox is consumed
+dismissing focus and the second one ticks it. Standard Flutter web behaviour
+rather than a defect, but it is two clicks where a user expects one.
+
+
 ## Session 2026-08-06 (cont.) — the mortgage split
 
 **A repayment-mortgage payment can no longer be silently counted in full.**
