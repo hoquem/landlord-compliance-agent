@@ -107,9 +107,9 @@ class _CertificateFormState extends State<CertificateForm> {
 
     return Container(
       margin: const EdgeInsets.fromLTRB(
-        Spacing.xl,
         Spacing.lg,
-        Spacing.xl,
+        Spacing.md,
+        Spacing.lg,
         Spacing.sm,
       ),
       padding: const EdgeInsets.all(Spacing.lg),
@@ -122,74 +122,92 @@ class _CertificateFormState extends State<CertificateForm> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text('Add a certificate', style: text.titleMedium),
-          const SizedBox(height: Spacing.lg),
-          Wrap(
-            spacing: Spacing.md,
-            runSpacing: Spacing.md,
+          const SizedBox(height: Spacing.md),
+          // Property — full width dropdown
+          _Field(
+            label: 'Property',
+            child: DropdownButton<String>(
+              value: _propertyId,
+              hint: const Text('Choose a property'),
+              underline: const SizedBox.shrink(),
+              isExpanded: true,
+              items: <DropdownMenuItem<String>>[
+                for (final PropertyRef p in widget.properties)
+                  DropdownMenuItem<String>(
+                    value: p.id,
+                    child: Text(p.label),
+                  ),
+              ],
+              onChanged: (String? v) => setState(() => _propertyId = v),
+            ),
+          ),
+          const SizedBox(height: Spacing.sm),
+          // Type + Expires — side by side
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              _Field(
-                label: 'Property',
-                child: DropdownButton<String>(
-                  value: _propertyId,
-                  hint: const Text('Choose'),
-                  underline: const SizedBox.shrink(),
-                  items: <DropdownMenuItem<String>>[
-                    for (final PropertyRef p in widget.properties)
-                      DropdownMenuItem<String>(
-                        value: p.id,
-                        child: Text(p.label),
-                      ),
-                  ],
-                  onChanged: (String? v) => setState(() => _propertyId = v),
-                ),
-              ),
-              _Field(
-                label: 'Type',
-                child: DropdownButton<String>(
-                  value: _type,
-                  underline: const SizedBox.shrink(),
-                  items: <DropdownMenuItem<String>>[
-                    for (final String t in kCertificateTypes)
-                      DropdownMenuItem<String>(
-                        value: t,
-                        child: Text(categoryLabel(t)),
-                      ),
-                  ],
-                  onChanged: (String? v) => setState(() => _type = v ?? _type),
-                ),
-              ),
-              _Field(
-                label: 'Expires',
-                child: TextButton(
-                  onPressed: _pickExpiry,
-                  child: Text(
-                    _expiry == null
-                        ? 'Choose a date'
-                        : '${_expiry!.day}/${_expiry!.month}/${_expiry!.year}',
+              Expanded(
+                child: _Field(
+                  label: 'Type',
+                  child: DropdownButton<String>(
+                    value: _type,
+                    underline: const SizedBox.shrink(),
+                    isExpanded: true,
+                    items: <DropdownMenuItem<String>>[
+                      for (final String t in kCertificateTypes)
+                        DropdownMenuItem<String>(
+                          value: t,
+                          child: Text(categoryLabel(t)),
+                        ),
+                    ],
+                    onChanged: (String? v) =>
+                        setState(() => _type = v ?? _type),
                   ),
                 ),
               ),
-              SizedBox(
-                width: 200,
-                child: TextField(
-                  controller: _ref,
-                  style: AppType.body.copyWith(color: palette.textBody),
-                  decoration: const InputDecoration(
-                    labelText: 'Reference (optional)',
-                    isDense: true,
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: _Field(
+                  label: 'Expires',
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: _pickExpiry,
+                      child: Text(
+                        _expiry == null
+                            ? 'Choose a date'
+                            : '${_expiry!.day}/${_expiry!.month}/${_expiry!.year}',
+                      ),
+                    ),
                   ),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: Spacing.sm),
+          // Reference — full width
+          _Field(
+            label: 'Reference (optional)',
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextField(
+                controller: _ref,
+                style: AppType.body.copyWith(color: palette.textBody),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+          ),
           if (_error != null) ...<Widget>[
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: Spacing.sm),
             Text(
               '$_error.',
-              style: text.bodyMedium?.copyWith(color: palette.danger),
+              style: AppType.body.copyWith(color: palette.danger),
             ),
           ],
-          const SizedBox(height: Spacing.lg),
+          const SizedBox(height: Spacing.md),
           Row(
             children: <Widget>[
               FilledButton(

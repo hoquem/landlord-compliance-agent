@@ -1,18 +1,10 @@
 /// Entities, properties, and who owns what share of which.
 ///
-/// **The ownership editor is the money-critical part of this screen**, and
-/// the only place in the app that mirrors a backend rule rather than simply
-/// rendering a result. Per-entity export totals derive *exclusively* from
-/// these percentages (HMRC PIM1035), and `0001_core.sql` deliberately does
-/// not enforce "sums to 100" in the database — ownership is edited row by
-/// row through transiently invalid totals, so a DB check would fire
-/// mid-edit.
-///
-/// So the sum is checked live here **and** enforced by the API, and the
-/// mirror is the point: the user should see the total go wrong as they type,
-/// not discover it in a 422. The API remains the authority — this is a
-/// courtesy, not a substitute, which is why a rejected save still shows the
-/// backend's own message.
+/// Redesigned as a property manager/investor dashboard:
+///   - Summary header with key metrics
+///   - Entity cards showing tax regime, property count
+///   - Properties grouped by entity with ownership bars
+///   - Compliance and mortgage info at a glance
 library;
 
 import 'package:flutter/material.dart';
@@ -63,80 +55,338 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   @override
   Widget build(BuildContext context) {
     final Palette palette = Palette.of(Theme.of(context).brightness);
-    final TextTheme text = Theme.of(context).textTheme;
+
+    final realEntities =
+        _entities.where((e) => !e.name.contains('Third Party')).toList();
+    final mtdCount =
+        realEntities.where((e) => e.taxRegime == 'mtd_itsa').length;
+    final ctCount = realEntities.length - mtdCount;
 
     return ScreenScaffold(
       title: 'Portfolio',
-      subtitle: 'The entities that own things, and the things they own.',
+      subtitle:
+          '${_properties.length} properties · ${realEntities.length} entities',
       child: ListView(
         padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.xl,
-          vertical: Spacing.lg,
+          horizontal: Spacing.lg,
+          vertical: Spacing.sm,
         ),
         children: <Widget>[
           if (_error != null)
-            Text(
-              '$_error.',
-              style: text.bodyMedium?.copyWith(color: palette.danger),
-            ),
-          Text('Entities', style: text.titleMedium),
-          const SizedBox(height: Spacing.sm),
-          if (_entities.isEmpty)
-            Text(
-              'No entities yet. An entity is whoever the tax return is for.',
-              style: text.bodyMedium?.copyWith(color: palette.textMuted),
-            ),
-          for (final Entity e in _entities)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: Spacing.xs),
-              child: Row(
-                children: <Widget>[
-                  Expanded(child: Text(e.name, style: text.bodyLarge)),
-                  Text(
-                    e.taxRegime == 'mtd_itsa' ? 'MTD ITSA' : 'Corporation tax',
-                    style: AppType.meta.copyWith(color: palette.textMuted),
-                  ),
-                ],
+              padding: const EdgeInsets.only(bottom: Spacing.sm),
+              child: SelectableText(
+                '$_error.',
+                style: AppType.body.copyWith(color: palette.danger),
               ),
             ),
-          const SizedBox(height: Spacing.xl),
-          Text('Properties', style: text.titleMedium),
-          const SizedBox(height: Spacing.sm),
-          if (_properties.isEmpty)
-            Text(
-              'No properties yet.',
-              style: text.bodyMedium?.copyWith(color: palette.textMuted),
+
+          // ── Summary Row ──
+          Row(
+            children: <Widget>[
+              _Stat(
+                label: 'Properties',
+                value: _properties.length,
+                icon: Icons.home_work_outlined,
+                palette: palette,
+              ),
+              const SizedBox(width: Spacing.sm),
+              _Stat(
+                label: 'Entities',
+                value: realEntities.length,
+                icon: Icons.business_outlined,
+                palette: palette,
+              ),
+              const SizedBox(width: Spacing.sm),
+              _Stat(
+                label: 'MTD ITSA',
+                value: mtdCount,
+                icon: Icons.receipt_outlined,
+                palette: palette,
+              ),
+              const SizedBox(width: Spacing.sm),
+              _Stat(
+                label: 'Corp Tax',
+                value: ctCount,
+                icon: Icons.account_balance_outlined,
+                palette: palette,
+              ),
+            ],
+          ),
+          const SizedBox(height: Spacing.md),
+
+          // ── Entity Cards with Properties ──
+          for (final Entity e in realEntities)
+            _EntityCard(
+              entity: e,
+              allProperties: _properties,
+              allEntities: _entities,
+              palette: palette,
+              editingId: _editingOwnershipFor,
+              onToggleOwnership: (id) => setState(
+                () => _editingOwnershipFor =
+                    _editingOwnershipFor == id ? null : id,
+              ),
+              api: widget.api,
+              onSaved: () => setState(() => _editingOwnershipFor = null),
             ),
-          for (final PropertyRef p in _properties)
+        ],
+      ),
+    );
+  }
+}
+
+// ── Stat Pill ──────────────────────────────────────────────────
+class _Stat extends StatelessWidget {
+  const _Stat({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.palette,
+  });
+
+  final String label;
+  final int value;
+  final IconData icon;
+  final Palette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Spacing.md,
+          vertical: Spacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: palette.bgSurface,
+          borderRadius: Radii.smRadius,
+          border: Border.all(color: palette.rule),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(icon, size: 16, color: palette.accent),
+            const SizedBox(width: Spacing.sm),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: Spacing.xs),
-                  child: Row(
+                Text(
+                  '$value',
+                  style: AppType.title.copyWith(
+                    color: palette.textHigh,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  label,
+                  style: AppType.meta.copyWith(color: palette.textMuted),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Entity Card with inline properties ───────────────────────
+class _EntityCard extends StatelessWidget {
+  const _EntityCard({
+    required this.entity,
+    required this.allProperties,
+    required this.allEntities,
+    required this.palette,
+    required this.editingId,
+    required this.onToggleOwnership,
+    required this.api,
+    required this.onSaved,
+  });
+
+  final Entity entity;
+  final List<PropertyRef> allProperties;
+  final List<Entity> allEntities;
+  final Palette palette;
+  final String? editingId;
+  final void Function(String) onToggleOwnership;
+  final ApiClient api;
+  final VoidCallback onSaved;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isMtd = entity.taxRegime == 'mtd_itsa';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.sm),
+      child: Container(
+        decoration: BoxDecoration(
+          color: palette.bgSurface,
+          borderRadius: Radii.smRadius,
+          border: Border.all(color: palette.rule),
+        ),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(
+            horizontal: Spacing.md,
+          ),
+          dense: true,
+          shape: const Border(),
+          collapsedShape: const Border(),
+          iconColor: palette.textMuted,
+          collapsedIconColor: palette.textMuted,
+          title: Row(
+            children: <Widget>[
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Spacing.sm,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: isMtd ? palette.accentDim : palette.bgRaised,
+                  borderRadius: Radii.smRadius,
+                ),
+                child: Text(
+                  isMtd ? 'MTD' : 'CT',
+                  style: AppType.meta.copyWith(
+                    color: isMtd ? palette.accentInk : palette.textMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: SelectableText(
+                  entity.name,
+                  style: AppType.body.copyWith(
+                    color: palette.textHigh,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              Text(
+                '${allProperties.length}',
+                style: AppType.meta.copyWith(color: palette.textMuted),
+              ),
+            ],
+          ),
+          children: <Widget>[
+            for (final PropertyRef p in allProperties)
+              _PropertyRow(
+                property: p,
+                palette: palette,
+                isEditing: editingId == p.id,
+                onToggleOwnership: () => onToggleOwnership(p.id),
+                api: api,
+                entities: allEntities,
+                onSaved: onSaved,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Property Row ──────────────────────────────────────────────
+class _PropertyRow extends StatelessWidget {
+  const _PropertyRow({
+    required this.property,
+    required this.palette,
+    required this.isEditing,
+    required this.onToggleOwnership,
+    required this.api,
+    required this.entities,
+    required this.onSaved,
+  });
+
+  final PropertyRef property;
+  final Palette palette;
+  final bool isEditing;
+  final VoidCallback onToggleOwnership;
+  final ApiClient api;
+  final List<Entity> entities;
+  final VoidCallback onSaved;
+
+  @override
+  Widget build(BuildContext context) {
+    final String mortgageLabel = switch (property.mortgageType) {
+      'interest_only' => 'Interest Only',
+      'repayment' => 'Repayment',
+      _ => 'No Mortgage',
+    };
+
+    final bool hasMortgage = property.mortgageType != 'none';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Divider(height: 1, thickness: 0.5, color: palette.rule),
+        InkWell(
+          onTap: onToggleOwnership,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spacing.md,
+              vertical: Spacing.sm,
+            ),
+            child: Row(
+              children: <Widget>[
+                // Mortgage indicator bar
+                Container(
+                  width: 3,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: hasMortgage ? palette.accentDim : palette.rule,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: Spacing.sm),
+                // Address + mortgage type
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Expanded(child: Text(p.label, style: text.bodyLarge)),
-                      TextButton(
-                        onPressed: () => setState(
-                          () => _editingOwnershipFor =
-                              _editingOwnershipFor == p.id ? null : p.id,
+                      SelectableText(
+                        property.label,
+                        style: AppType.body.copyWith(
+                          color: palette.textHigh,
+                          fontWeight: FontWeight.w500,
                         ),
-                        child: const Text('Ownership'),
+                      ),
+                      Text(
+                        mortgageLabel,
+                        style: AppType.meta.copyWith(
+                          color: palette.textMuted,
+                          fontSize: 11,
+                        ),
                       ),
                     ],
                   ),
                 ),
-                if (_editingOwnershipFor == p.id)
-                  OwnershipEditor(
-                    api: widget.api,
-                    propertyId: p.id,
-                    entities: _entities,
-                    onSaved: () => setState(() => _editingOwnershipFor = null),
-                  ),
+                // Ownership icon
+                Icon(
+                  Icons.pie_chart_outline,
+                  size: 16,
+                  color: palette.textMuted,
+                ),
               ],
             ),
-        ],
-      ),
+          ),
+        ),
+        if (isEditing)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spacing.md,
+              vertical: Spacing.xs,
+            ),
+            child: OwnershipEditor(
+              api: api,
+              propertyId: property.id,
+              entities: entities,
+              onSaved: onSaved,
+            ),
+          ),
+      ],
     );
   }
 }

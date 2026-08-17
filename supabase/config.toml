@@ -96,7 +96,7 @@ enabled = true
 # Port to use for Supabase Studio.
 port = 54323
 # External URL of the API server that frontend connects to.
-api_url = "http://127.0.0.1"
+api_url = "http://macmini1.tail44bc34.ts.net:54321"
 # OpenAI API Key to use for Supabase AI in the Supabase Studio.
 openai_api_key = "env(OPENAI_API_KEY)"
 
@@ -156,9 +156,10 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+site_url = "http://macmini1.tail44bc34.ts.net:8080"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
-# external_url = ""
+# Set to Tailscale URL so GoTrue builds the correct redirect_uri for OAuth providers.
+external_url = "http://macmini1.tail44bc34.ts.net"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
 # The Flutter web app is served on port 3000 in development
 # (`flutter run -d chrome --web-port=3000`), which is why site_url above pins
@@ -169,6 +170,12 @@ site_url = "http://127.0.0.1:3000"
 additional_redirect_urls = [
   "http://127.0.0.1:3000",
   "http://localhost:3000",
+  "http://127.0.0.1:3001",
+  "http://localhost:3001",
+  "http://127.0.0.1:8080",
+  "http://localhost:8080",
+  "http://macmini1.tail44bc34.ts.net:8080",
+  "http://100.76.98.89:8080",
 ]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
@@ -363,6 +370,8 @@ enabled = true
 client_id = "env(GOOGLE_OAUTH_CLIENT_ID)"
 # DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
 secret = "env(GOOGLE_OAUTH_CLIENT_SECRET)"
+# Explicitly set the callback URL for Tailscale access.
+redirect_uri = "http://macmini1.tail44bc34.ts.net:54321/auth/v1/callback"
 # Required for local sign in with Google auth, per the [auth.external.apple]
 # comment above: the local stack cannot complete Google's nonce check.
 skip_nonce_check = true

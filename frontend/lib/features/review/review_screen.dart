@@ -29,6 +29,10 @@ import '../../theme/status_colors.dart';
 import '../../theme/tokens.dart';
 import 'category_picker.dart';
 
+// Enables text selection (copy/paste) across the app when running on web.
+// CanvasKit renders text as canvas pixels, so standard Text widgets are not
+// selectable. SelectableText restores native clipboard access.
+
 class ReviewScreen extends StatefulWidget {
   const ReviewScreen({required this.api, super.key});
 
@@ -43,6 +47,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   List<PropertyRef> _properties = <PropertyRef>[];
   List<String> _categories = <String>[];
   final Set<String> _selected = <String>{};
+  String _searchQuery = '';
 
   /// Interest inputs, one per repayment-mortgage row.
   ///
@@ -208,6 +213,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final Palette palette = Palette.of(Theme.of(context).brightness);
     final List<Txn> txns = _txns ?? <Txn>[];
     final int outstanding = txns.where((Txn t) => t.needsDecision).length;
+    // Filter by search query — matches description, category, or amount.
+    final List<Txn> filtered = _searchQuery.isEmpty
+        ? txns
+        : txns.where((Txn t) {
+            final String q = _searchQuery.toLowerCase();
+            return t.description.toLowerCase().contains(q) ||
+                (t.hmrcCategory?.toLowerCase().contains(q) ?? false) ||
+                t.amount.toString().contains(q);
+          }).toList();
 
     return ScreenScaffold(
       title: 'Review',
@@ -232,6 +246,33 @@ class _ReviewScreenState extends State<ReviewScreen> {
       child: ListView(
         padding: const EdgeInsets.only(bottom: Spacing.xl),
         children: <Widget>[
+          // Search bar for finding transactions quickly
+          if (_txns != null && txns.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Spacing.lg,
+                Spacing.sm,
+                Spacing.lg,
+                Spacing.sm,
+              ),
+              child: TextField(
+                onChanged: (value) => setState(() => _searchQuery = value),
+                decoration: InputDecoration(
+                  hintText: 'Search description, category, or amount…',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () => setState(() => _searchQuery = ''),
+                        )
+                      : null,
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(Spacing.xl),
@@ -245,7 +286,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           if (_txns != null && txns.isEmpty) const _NothingToReview(),
           if (_txns != null && txns.isNotEmpty && outstanding == 0)
             const _QueueCleared(),
-          for (final Txn txn in txns)
+          for (final Txn txn in filtered)
             _ReviewRow(
               txn: txn,
               category: _categoryFor(txn),
@@ -368,7 +409,7 @@ class _ReviewRow extends StatelessWidget {
                         Row(
                           children: <Widget>[
                             Flexible(
-                              child: Text(
+                              child: SelectableText(
                                 proposal,
                                 style: AppType.title.copyWith(
                                   // Settled work recedes; an uncertain
@@ -402,7 +443,7 @@ class _ReviewRow extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 2),
-                        Text(
+                        SelectableText(
                           txn.description,
                           style: AppType.meta.copyWith(
                             color: palette.textMuted,
@@ -422,7 +463,7 @@ class _ReviewRow extends StatelessWidget {
               const SizedBox(width: Spacing.md),
               Padding(
                 padding: const EdgeInsets.only(top: Spacing.xs / 2),
-                child: Text(
+                child: SelectableText(
                   formatMoney(txn.signedForDisplay),
                   // Never coloured by sign: an expense is not an error.
                   style: AppType.numeric.copyWith(
