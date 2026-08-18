@@ -66,6 +66,63 @@ class _CertificatesScreenState extends State<CertificatesScreen> {
     return id;
   }
 
+  /// Required certificate types for any rental property.
+  static const _requiredTypes = <String>[
+    'gas_safety', 'eicr', 'epc', 'deposit_protection',
+  ];
+
+  /// Build widgets for properties that have no certificates at all.
+  /// These are the highest-risk compliance gaps — the screen was hiding them.
+  List<Widget> _missingCertificateProperties(List<PropertyCertificates> groups) {
+    final propertiesWithCerts = groups.map((g) => g.propertyId).toSet();
+    final missing = _properties
+        .where((p) => !propertiesWithCerts.contains(p.id))
+        .toList();
+    if (missing.isEmpty) return <Widget>[];
+
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Spacing.xl, Spacing.lg, Spacing.xl, Spacing.sm,
+        ),
+        child: Text(
+          'Properties with no certificates',
+          style: AppType.title.copyWith(color: palette.danger),
+        ),
+      ),
+      for (final PropertyRef p in missing)
+        Column(
+          children: <Widget>[
+            Divider(height: 1, thickness: 1, color: palette.rule),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.xl,
+                vertical: Spacing.sm + Spacing.xs,
+              ),
+              child: Row(
+                children: <Widget>[
+                  Icon(Icons.warning_amber, size: 16, color: palette.danger),
+                  const SizedBox(width: Spacing.sm),
+                  Expanded(
+                    child: SelectableText(
+                      p.label,
+                      style: AppType.body.copyWith(color: palette.textHigh),
+                    ),
+                  ),
+                  Text(
+                    'Missing ${_requiredTypes.length} required certs',
+                    style: AppType.meta.copyWith(color: palette.danger),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      const SizedBox(height: Spacing.lg),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final Palette palette = Palette.of(Theme.of(context).brightness);
@@ -95,15 +152,31 @@ class _CertificatesScreenState extends State<CertificatesScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(Spacing.xl),
-              child: Text(
-                '$_error.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: palette.danger),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  SelectableText(
+                    'Something went wrong loading certificates.',
+                    style: AppType.title.copyWith(color: palette.danger),
+                  ),
+                  const SizedBox(height: Spacing.xs),
+                  SelectableText(
+                    '$_error',
+                    style: AppType.body.copyWith(color: palette.textMuted),
+                  ),
+                  const SizedBox(height: Spacing.sm),
+                  TextButton(
+                    onPressed: _load,
+                    child: const Text('Try again'),
+                  ),
+                ],
               ),
             ),
-          if (_groups != null && groups.isEmpty && !_adding)
+          if (_groups != null && groups.isEmpty && _properties.isEmpty && !_adding)
             const _NoCertificates(),
+          // Properties with NO certificates at all — the compliance gap
+          if (_groups != null && _properties.isNotEmpty)
+            ..._missingCertificateProperties(groups),
           for (final PropertyCertificates group in groups)
             _PropertyGroup(
               label: _propertyLabel(group.propertyId),
