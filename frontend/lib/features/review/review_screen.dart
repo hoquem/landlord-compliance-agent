@@ -46,6 +46,7 @@ class ReviewScreen extends StatefulWidget {
 class _ReviewScreenState extends State<ReviewScreen> {
   List<Txn>? _txns;
   List<PropertyRef> _properties = <PropertyRef>[];
+  List<Entity> _entities = <Entity>[];
   List<String> _categories = <String>[];
   final Set<String> _selected = <String>{};
   String _searchQuery = '';
@@ -131,10 +132,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
       final List<Txn> txns = await widget.api.listTransactions();
       final List<PropertyRef> properties = await widget.api.listProperties();
       final List<String> categories = await widget.api.listCategories();
+      final List<Entity> entities = await widget.api.listEntities();
       if (!mounted) return;
       setState(() {
         _txns = _ordered(txns);
         _properties = properties;
+        _entities = entities;
         _categories = categories;
         _error = null;
       });
@@ -339,6 +342,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               txn: txn,
               category: _categoryFor(txn),
               property: _propertyFor(txn),
+              entityName: _entityNameFor(txn),
               selected: _selected.contains(txn.id),
               interestController: _needsInterest(txn)
                   ? _interestController(txn)
@@ -374,6 +378,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
     return null;
   }
+
+  String? _entityNameFor(Txn txn) {
+    if (txn.entityId == null) return null;
+    for (final Entity e in _entities) {
+      if (e.id == txn.entityId) return e.name;
+    }
+    return null;
+  }
 }
 
 class _ReviewRow extends StatelessWidget {
@@ -381,6 +393,7 @@ class _ReviewRow extends StatelessWidget {
     required this.txn,
     required this.category,
     required this.property,
+    required this.entityName,
     required this.selected,
     required this.onToggle,
     required this.interestController,
@@ -393,6 +406,7 @@ class _ReviewRow extends StatelessWidget {
   final Txn txn;
   final String? category;
   final PropertyRef? property;
+  final String? entityName;
   final bool selected;
   final VoidCallback onToggle;
 
@@ -498,6 +512,17 @@ class _ReviewRow extends StatelessWidget {
                             color: palette.textMuted,
                           ),
                         ),
+                        if (entityName != null) ...<Widget>[
+                          const SizedBox(height: 1),
+                          Text(
+                            entityName!,
+                            style: AppType.meta.copyWith(
+                              color: palette.textMuted,
+                              fontStyle: FontStyle.italic,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                         if (interestController != null)
                           _InterestSplit(
                             controller: interestController!,

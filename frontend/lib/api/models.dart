@@ -179,6 +179,7 @@ class Txn {
     this.hmrcCategory,
     this.propertyId,
     this.confidence,
+    this.entityId,
   });
 
   factory Txn.fromJson(Map<String, dynamic> json) => Txn(
@@ -193,6 +194,7 @@ class Txn {
     confidence: json['confidence'] == null
         ? null
         : double.parse('${json['confidence']}'),
+    entityId: json['entity_id'] as String?,
   );
 
   final String id;
@@ -208,6 +210,7 @@ class Txn {
   final String status;
   final String? hmrcCategory;
   final String? propertyId;
+  final String? entityId;
 
   /// The agent's confidence, 0–1, or null if no agent has seen this line.
   final double? confidence;
