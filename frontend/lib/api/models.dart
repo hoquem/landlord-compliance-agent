@@ -114,6 +114,11 @@ class PropertyRef {
     required this.id,
     required this.label,
     this.mortgageType = 'none',
+    this.financeCostClassification = 'residential',
+    this.epcRating,
+    this.epcExpiry,
+    this.bedroomCount,
+    this.licensingFlag = false,
   });
 
   factory PropertyRef.fromJson(Map<String, dynamic> json) => PropertyRef(
@@ -123,6 +128,14 @@ class PropertyRef {
       json['postcode'] as String?,
     ].whereType<String>().join(', '),
     mortgageType: json['mortgage_type'] as String? ?? 'none',
+    financeCostClassification:
+        json['finance_cost_classification'] as String? ?? 'residential',
+    epcRating: json['epc_rating'] as String?,
+    epcExpiry: json['epc_expiry'] == null
+        ? null
+        : DateTime.parse(json['epc_expiry'] as String),
+    bedroomCount: json['bedroom_count'] as int?,
+    licensingFlag: json['licensing_flag'] as bool? ?? false,
   );
 
   final String id;
@@ -133,6 +146,22 @@ class PropertyRef {
   /// capital, and only the interest is an allowable expense — so the review
   /// screen has to collect the split before the line can be confirmed.
   final String mortgageType;
+
+  /// `residential` or `non_residential` — determines which finance cost
+  /// category applies and which HMRC rules govern the income.
+  final String financeCostClassification;
+
+  /// EPC rating (A-G) if known.
+  final String? epcRating;
+
+  /// EPC certificate expiry date, if known.
+  final DateTime? epcExpiry;
+
+  /// Number of bedrooms (for HMO licensing assessment).
+  final int? bedroomCount;
+
+  /// Whether this property requires HMO licensing.
+  final bool licensingFlag;
 
   /// Whether a finance cost on this property needs its interest recorded.
   bool get needsInterestSplit => mortgageType == 'repayment';

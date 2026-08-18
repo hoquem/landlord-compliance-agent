@@ -1,11 +1,13 @@
 /// Entities, properties, and who owns what share of which.
 ///
-/// Redesigned as expandable surface panels (not cards — DESIGN.md bans
-/// bordered card grids, but allows bg-surface panels for grouping).
-///
-/// Collapsed: scannable list — property name, mortgage type, ownership %
-/// Expanded: full detail — entity, mortgage (editable), ownership (editable),
-///           bank accounts, compliance status
+/// Expandable bg-surface panels showing compliance-focused data:
+///   - Entity (from ownership, not guessed)
+///   - Mortgage type (editable)
+///   - Ownership % (editable)
+///   - Finance cost classification (residential/non-residential)
+///   - Compliance certificates (Gas Safety, EICR, EPC) with status
+///   - HMO licensing flag + bedroom count
+///   - Bank accounts linked to the entity
 library;
 
 import 'package:flutter/material.dart';
@@ -13,6 +15,7 @@ import 'package:flutter/material.dart';
 import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../app/widgets/screen_scaffold.dart';
+import '../../app/widgets/status_pill.dart';
 import '../../theme/tokens.dart';
 import 'ownership_editor.dart';
 
@@ -28,6 +31,7 @@ class PortfolioScreen extends StatefulWidget {
 class _PortfolioScreenState extends State<PortfolioScreen> {
   List<Entity> _entities = <Entity>[];
   List<PropertyRef> _properties = <PropertyRef>[];
+  List<PropertyCertificates> _certs = <PropertyCertificates>[];
   String? _error;
   String? _expandedPropertyId;
 
@@ -41,25 +45,19 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     try {
       final List<Entity> entities = await widget.api.listEntities();
       final List<PropertyRef> properties = await widget.api.listProperties();
+      final List<PropertyCertificates> certs =
+          await widget.api.listCertificates();
       if (!mounted) return;
       setState(() {
         _entities = entities;
         _properties = properties;
+        _certs = certs;
         _error = null;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '$error');
     }
-  }
-
-  Entity? _entityFor(PropertyRef p) {
-    // Match by ownership — find which entity owns this property
-    // For now, use the first entity that isn't "Third Party"
-    // The real linking comes from property_ownership
-    return _entities
-        .where((e) => !e.name.contains('Third Party'))
-        .firstOrNull;
   }
 
   @override
@@ -84,9 +82,13 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
             _ErrorLine(message: _error!, onRetry: _load),
           for (final PropertyRef p in _properties)
             _PropertyPanel(
+              key: ValueKey(p.id),
               property: p,
-              entity: _entityFor(p),
               entities: _entities,
+              certs: _certs
+                  .where((c) => c.propertyId == p.id)
+                  .fold<List<Certificate>>(<Certificate>[],
+                      (acc, c) => acc..addAll(c.certificates)),
               api: widget.api,
               isExpanded: _expandedPropertyId == p.id,
               onToggle: () => setState(
@@ -110,22 +112,23 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 }
 
-// ── Property Panel (expandable bg-surface, no border/shadow) ───
+// ── Property Panel ─────────────────────────────────────────────
 class _PropertyPanel extends StatefulWidget {
   const _PropertyPanel({
     required this.property,
-    required this.entity,
     required this.entities,
+    required this.certs,
     required this.api,
     required this.isExpanded,
     required this.onToggle,
     required this.onSaved,
     required this.palette,
+    super.key,
   });
 
   final PropertyRef property;
-  final Entity? entity;
   final List<Entity> entities;
+  final List<Certificate> certs;
   final ApiClient api;
   final bool isExpanded;
   final VoidCallback onToggle;
@@ -164,12 +167,61 @@ class _PropertyPanelState extends State<_PropertyPanel> {
   };
 
   String get _ownershipLabel {
-    if (_ownership == null || _ownership!.isEmpty) return '—';
-    if (_ownership!.length == 1) {
-      return '${_ownership![0].percentage.toStringAsFixed(0)}%';
+    if (_ownership == null) return '—';
+    if (_ownership!.isEmpty) return '—';
+    // Show primary owner name + percentage
+    final real = _ownership!
+        .where((s) => !widget.entities
+            .any((e) => e.id == s.entityId && e.name.contains('Third Party')))
+        .toList();
+    if (real.isEmpty) return '${_ownership!.length} owners';
+    final share = real.first;
+    final entity =
+        widget.entities.where((e) => e.id == share.entityId).firstOrNull;
+    final name = entity?.name ?? 'Unknown';
+    if (name.length > 20) {
+      return '${share.percentage.toStringAsFixed(0)}% $name';
     }
-    return '${_ownership!.length} owners';
+    return '$name ${share.percentage.toStringAsFixed(0)}%';
   }
+
+  String get _entityName {
+    if (_ownership == null || _ownership!.isEmpty) return '—';
+    final real = _ownership!
+        .where((s) => !widget.entities
+            .any((e) => e.id == s.entityId && e.name.contains('Third Party')))
+        .toList();
+    if (real.isEmpty) return '—';
+    final entity =
+        widget.entities.where((e) => e.id == real.first.entityId).firstOrNull;
+    return entity?.name ?? '—';
+  }
+
+  String get _entityTaxRegime {
+    if (_ownership == null || _ownership!.isEmpty) return '';
+    final real = _ownership!
+        .where((s) => !widget.entities
+            .any((e) => e.id == s.entityId && e.name.contains('Third Party')))
+        .toList();
+    if (real.isEmpty) return '';
+    final entity =
+        widget.entities.where((e) => e.id == real.first.entityId).firstOrNull;
+    return entity?.taxRegime ?? '';
+  }
+
+  String _certStatus(Certificate c) {
+    final now = DateTime.now();
+    if (c.expiryDate.isBefore(now)) return 'expired';
+    if (c.expiryDate.difference(now).inDays < 60) return 'expiring';
+    return 'valid';
+  }
+
+  String _certLabel(String type) => switch (type) {
+    'gas_safety' => 'Gas Safety',
+    'eicr' => 'EICR',
+    'epc' => 'EPC',
+    _ => type,
+  };
 
   Future<void> _saveMortgageType() async {
     if (_selectedMortgageType == null) return;
@@ -199,7 +251,7 @@ class _PropertyPanelState extends State<_PropertyPanel> {
       padding: const EdgeInsets.only(bottom: Spacing.sm),
       child: Column(
         children: <Widget>[
-          // Collapsed header row — always visible
+          // Collapsed header
           InkWell(
             onTap: widget.onToggle,
             child: Container(
@@ -230,7 +282,6 @@ class _PropertyPanelState extends State<_PropertyPanel> {
                       ],
                     ),
                   ),
-                  // Ownership summary
                   Text(
                     _ownershipLabel,
                     style: AppType.numeric.copyWith(color: palette.textMuted),
@@ -248,7 +299,7 @@ class _PropertyPanelState extends State<_PropertyPanel> {
             ),
           ),
 
-          // Expanded detail panel
+          // Expanded detail
           if (widget.isExpanded)
             Container(
               color: palette.bgSurface,
@@ -261,16 +312,13 @@ class _PropertyPanelState extends State<_PropertyPanel> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  // Entity
-                  if (widget.entity != null)
-                    _DetailRow(
-                      label: 'Entity',
-                      value: widget.entity!.name,
-                      badge: widget.entity!.taxRegime == 'mtd_itsa'
-                          ? 'MTD'
-                          : 'CT',
-                      palette: palette,
-                    ),
+                  // Entity (from ownership)
+                  _DetailRow(
+                    label: 'Entity',
+                    value: _entityName,
+                    badge: _entityTaxRegime == 'mtd_itsa' ? 'MTD' : 'CT',
+                    palette: palette,
+                  ),
 
                   // Mortgage type (editable)
                   _DetailRow(
@@ -298,7 +346,7 @@ class _PropertyPanelState extends State<_PropertyPanel> {
                     ),
                   ],
 
-                  // Ownership (editable inline)
+                  // Ownership (editable)
                   _DetailRow(
                     label: 'Ownership',
                     value: _ownershipLabel,
@@ -326,16 +374,62 @@ class _PropertyPanelState extends State<_PropertyPanel> {
                       ),
                     ),
 
-                  // Bank accounts info
+                  // Finance cost classification
                   _DetailRow(
-                    label: 'Bank accounts',
-                    value: _ownership != null && _ownership!.isNotEmpty
-                        ? 'Linked to entity accounts'
-                        : 'No accounts linked',
+                    label: 'Type',
+                    value: widget.property.financeCostClassification ==
+                            'residential'
+                        ? 'Residential'
+                        : 'Non-Residential',
                     palette: palette,
                   ),
 
-                  const SizedBox(height: Spacing.xs),
+                  // EPC
+                  _DetailRow(
+                    label: 'EPC',
+                    value: widget.property.epcRating != null
+                        ? '${widget.property.epcRating}'
+                            '${widget.property.epcExpiry != null ? " · exp ${widget.property.epcExpiry!.day}/${widget.property.epcExpiry!.month}/${widget.property.epcExpiry!.year}" : ""}'
+                        : 'Not recorded',
+                    palette: palette,
+                  ),
+
+                  // HMO / Licensing
+                  _DetailRow(
+                    label: 'Licensing',
+                    value: widget.property.licensingFlag
+                        ? 'HMO licensed${widget.property.bedroomCount != null ? " · ${widget.property.bedroomCount} beds" : ""}'
+                        : 'Not required${widget.property.bedroomCount != null ? " · ${widget.property.bedroomCount} beds" : ""}',
+                    palette: palette,
+                  ),
+
+                  // Compliance certificates
+                  if (widget.certs.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: Spacing.xs),
+                    Text(
+                      'Certificates',
+                      style: AppType.meta.copyWith(color: palette.textMuted),
+                    ),
+                    const SizedBox(height: Spacing.xs),
+                    for (final c in widget.certs)
+                      _CertRow(
+                        cert: c,
+                        status: _certStatus(c),
+                        label: _certLabel(c.certificateType),
+                        palette: palette,
+                      ),
+                  ] else ...<Widget>[
+                    const SizedBox(height: Spacing.xs),
+                    Text(
+                      'Certificates',
+                      style: AppType.meta.copyWith(color: palette.textMuted),
+                    ),
+                    const SizedBox(height: Spacing.xs),
+                    Text(
+                      'None on file. Add gas safety, EICR and EPC in the Certificates tab.',
+                      style: AppType.meta.copyWith(color: palette.textMuted),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -345,7 +439,71 @@ class _PropertyPanelState extends State<_PropertyPanel> {
   }
 }
 
-// ── Detail Row (label + value + optional edit button) ─────────
+// ── Certificate Row ────────────────────────────────────────────
+class _CertRow extends StatelessWidget {
+  const _CertRow({
+    required this.cert,
+    required this.status,
+    required this.label,
+    required this.palette,
+  });
+
+  final Certificate cert;
+  final String status;
+  final String label;
+  final Palette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final months = <String>[
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final expiry =
+        '${cert.expiryDate.day} ${months[cert.expiryDate.month - 1]} ${cert.expiryDate.year}';
+
+    final WorkState state = switch (status) {
+      'expired' => WorkState.wrong,
+      'expiring' => WorkState.needsYou,
+      _ => WorkState.settled,
+    };
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 100,
+            child: Text(label, style: AppType.body.copyWith(
+              color: palette.textHigh,
+            )),
+          ),
+          Expanded(
+            child: Text(expiry, style: AppType.numeric.copyWith(
+              color: palette.textMuted,
+            )),
+          ),
+          SizedBox(
+            width: 80,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: StatusPill(
+                state: state,
+                label: switch (status) {
+                  'expired' => 'Lapsed',
+                  'expiring' => 'Expiring',
+                  _ => 'Valid',
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Detail Row ─────────────────────────────────────────────────
 class _DetailRow extends StatelessWidget {
   const _DetailRow({
     required this.label,
@@ -422,7 +580,7 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-// ── Mortgage Editor (inline dropdown) ─────────────────────────
+// ── Mortgage Editor ────────────────────────────────────────────
 class _MortgageEditor extends StatelessWidget {
   const _MortgageEditor({
     required this.currentType,
@@ -504,7 +662,7 @@ class _MortgageEditor extends StatelessWidget {
   }
 }
 
-// ── Error line with retry ──────────────────────────────────────
+// ── Error ──────────────────────────────────────────────────────
 class _ErrorLine extends StatelessWidget {
   const _ErrorLine({required this.message, required this.onRetry});
 
