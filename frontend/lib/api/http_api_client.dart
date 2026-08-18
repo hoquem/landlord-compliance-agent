@@ -262,6 +262,20 @@ class HttpApiClient implements ApiClient {
   }
 
   @override
+  Future<void> updateProperty(String propertyId, {String? mortgageType}) async {
+    final Map<String, Object?> body = <String, Object?>{};
+    if (mortgageType != null) body['mortgage_type'] = mortgageType;
+    if (body.isEmpty) return;
+
+    final http.Response response = await _client.patch(
+      Uri.parse('$baseUrl/properties/$propertyId'),
+      headers: <String, String>{..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
   Future<ImportSummary> uploadStatement({
     required String entityId,
     required String sourceBank,

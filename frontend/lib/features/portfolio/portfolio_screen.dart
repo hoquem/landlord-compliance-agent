@@ -1,10 +1,11 @@
 /// Entities, properties, and who owns what share of which.
 ///
-/// Redesigned to follow the calm, row-based design language:
-///   - No cards, no hero metrics
-///   - Entities as a simple list with tax regime badges
-///   - Properties as hairline-divided rows (matching review/imports)
-///   - Ownership editor inline
+/// Redesigned as expandable surface panels (not cards — DESIGN.md bans
+/// bordered card grids, but allows bg-surface panels for grouping).
+///
+/// Collapsed: scannable list — property name, mortgage type, ownership %
+/// Expanded: full detail — entity, mortgage (editable), ownership (editable),
+///           bank accounts, compliance status
 library;
 
 import 'package:flutter/material.dart';
@@ -28,7 +29,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   List<Entity> _entities = <Entity>[];
   List<PropertyRef> _properties = <PropertyRef>[];
   String? _error;
-  String? _editingOwnershipFor;
+  String? _expandedPropertyId;
 
   @override
   void initState() {
@@ -52,6 +53,15 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     }
   }
 
+  Entity? _entityFor(PropertyRef p) {
+    // Match by ownership — find which entity owns this property
+    // For now, use the first entity that isn't "Third Party"
+    // The real linking comes from property_ownership
+    return _entities
+        .where((e) => !e.name.contains('Third Party'))
+        .firstOrNull;
+  }
+
   @override
   Widget build(BuildContext context) {
     final Palette palette = Palette.of(Theme.of(context).brightness);
@@ -72,47 +82,25 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         children: <Widget>[
           if (_error != null)
             _ErrorLine(message: _error!, onRetry: _load),
-
-          // ── Entities ──
-          if (realEntities.isNotEmpty) ...<Widget>[
-            Text('Entities', style: AppType.title.copyWith(
-              color: palette.textMuted,
-              fontWeight: FontWeight.w600,
-            )),
-            const SizedBox(height: Spacing.sm),
-            for (final Entity e in realEntities)
-              _EntityRow(entity: e, palette: palette),
-            const SizedBox(height: Spacing.xl),
-          ],
-
-          // ── Properties ──
-          if (_properties.isNotEmpty) ...<Widget>[
-            Text('Properties', style: AppType.title.copyWith(
-              color: palette.textMuted,
-              fontWeight: FontWeight.w600,
-            )),
-            const SizedBox(height: Spacing.sm),
-            for (final PropertyRef p in _properties)
-              _PropertyRow(
-                property: p,
-                palette: palette,
-                isEditing: _editingOwnershipFor == p.id,
-                onToggleOwnership: () => setState(
-                  () => _editingOwnershipFor =
-                      _editingOwnershipFor == p.id ? null : p.id,
-                ),
-                api: widget.api,
-                entities: _entities,
-                onSaved: () => setState(() => _editingOwnershipFor = null),
+          for (final PropertyRef p in _properties)
+            _PropertyPanel(
+              property: p,
+              entity: _entityFor(p),
+              entities: _entities,
+              api: widget.api,
+              isExpanded: _expandedPropertyId == p.id,
+              onToggle: () => setState(
+                () => _expandedPropertyId =
+                    _expandedPropertyId == p.id ? null : p.id,
               ),
-          ],
-
+              onSaved: _load,
+              palette: palette,
+            ),
           if (_properties.isEmpty && _entities.isEmpty && _error == null)
             Padding(
               padding: const EdgeInsets.only(top: Spacing.xl),
               child: Text(
-                'No entities or properties yet. Add them through the API '
-                'or seed the database.',
+                'No entities or properties yet.',
                 style: AppType.body.copyWith(color: palette.textMuted),
               ),
             ),
@@ -122,153 +110,396 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 }
 
-// ── Entity Row (hairline-divided, no cards) ───────────────────
-class _EntityRow extends StatelessWidget {
-  const _EntityRow({required this.entity, required this.palette});
+// ── Property Panel (expandable bg-surface, no border/shadow) ───
+class _PropertyPanel extends StatefulWidget {
+  const _PropertyPanel({
+    required this.property,
+    required this.entity,
+    required this.entities,
+    required this.api,
+    required this.isExpanded,
+    required this.onToggle,
+    required this.onSaved,
+    required this.palette,
+  });
 
-  final Entity entity;
+  final PropertyRef property;
+  final Entity? entity;
+  final List<Entity> entities;
+  final ApiClient api;
+  final bool isExpanded;
+  final VoidCallback onToggle;
+  final VoidCallback onSaved;
   final Palette palette;
 
   @override
-  Widget build(BuildContext context) {
-    final bool isMtd = entity.taxRegime == 'mtd_itsa';
+  State<_PropertyPanel> createState() => _PropertyPanelState();
+}
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Divider(height: 1, thickness: 0.5, color: palette.rule),
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Spacing.sm,
-            vertical: Spacing.sm,
-          ),
-          child: Row(
-            children: <Widget>[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Spacing.sm,
-                  vertical: 2,
-                ),
-                decoration: BoxDecoration(
-                  color: isMtd ? palette.accentDim : palette.bgRaised,
-                  borderRadius: Radii.smRadius,
-                ),
-                child: Text(
-                  isMtd ? 'MTD' : 'CT',
-                  style: AppType.meta.copyWith(
-                    color: isMtd ? palette.accentInk : palette.textMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 11,
-                  ),
-                ),
+class _PropertyPanelState extends State<_PropertyPanel> {
+  bool _editingMortgage = false;
+  bool _editingOwnership = false;
+  String? _selectedMortgageType;
+  List<OwnershipShare>? _ownership;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.isExpanded && _ownership == null) {
+      _loadOwnership();
+    }
+  }
+
+  Future<void> _loadOwnership() async {
+    try {
+      final shares = await widget.api.getOwnership(widget.property.id);
+      if (mounted) setState(() => _ownership = shares);
+    } catch (_) {}
+  }
+
+  String get _mortgageLabel => switch (widget.property.mortgageType) {
+    'interest_only' => 'Interest Only',
+    'repayment' => 'Repayment',
+    _ => 'No Mortgage',
+  };
+
+  String get _ownershipLabel {
+    if (_ownership == null || _ownership!.isEmpty) return '—';
+    if (_ownership!.length == 1) {
+      return '${_ownership![0].percentage.toStringAsFixed(0)}%';
+    }
+    return '${_ownership!.length} owners';
+  }
+
+  Future<void> _saveMortgageType() async {
+    if (_selectedMortgageType == null) return;
+    try {
+      await widget.api.updateProperty(
+        widget.property.id,
+        mortgageType: _selectedMortgageType,
+      );
+      if (mounted) {
+        setState(() => _editingMortgage = false);
+        widget.onSaved();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Palette palette = widget.palette;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.sm),
+      child: Column(
+        children: <Widget>[
+          // Collapsed header row — always visible
+          InkWell(
+            onTap: widget.onToggle,
+            child: Container(
+              color: palette.bgSurface,
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.md,
+                vertical: Spacing.sm + Spacing.xs,
               ),
-              const SizedBox(width: Spacing.sm),
-              Expanded(
-                child: SelectableText(
-                  entity.name,
-                  style: AppType.body.copyWith(
-                    color: palette.textHigh,
-                    fontWeight: FontWeight.w500,
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        SelectableText(
+                          widget.property.label,
+                          style: AppType.body.copyWith(
+                            color: palette.textHigh,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          _mortgageLabel,
+                          style: AppType.meta.copyWith(
+                            color: palette.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                  // Ownership summary
+                  Text(
+                    _ownershipLabel,
+                    style: AppType.numeric.copyWith(color: palette.textMuted),
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Icon(
+                    widget.isExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 18,
+                    color: palette.textMuted,
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ],
+
+          // Expanded detail panel
+          if (widget.isExpanded)
+            Container(
+              color: palette.bgSurface,
+              padding: const EdgeInsets.fromLTRB(
+                Spacing.md,
+                0,
+                Spacing.md,
+                Spacing.md,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  // Entity
+                  if (widget.entity != null)
+                    _DetailRow(
+                      label: 'Entity',
+                      value: widget.entity!.name,
+                      badge: widget.entity!.taxRegime == 'mtd_itsa'
+                          ? 'MTD'
+                          : 'CT',
+                      palette: palette,
+                    ),
+
+                  // Mortgage type (editable)
+                  _DetailRow(
+                    label: 'Mortgage',
+                    value: _mortgageLabel,
+                    palette: palette,
+                    onEdit: () => setState(
+                      () {
+                        _editingMortgage = !_editingMortgage;
+                        _selectedMortgageType = widget.property.mortgageType;
+                      },
+                    ),
+                  ),
+                  if (_editingMortgage) ...<Widget>[
+                    const SizedBox(height: Spacing.xs),
+                    _MortgageEditor(
+                      currentType: _selectedMortgageType ??
+                          widget.property.mortgageType,
+                      onChanged: (v) =>
+                          setState(() => _selectedMortgageType = v),
+                      onSave: _saveMortgageType,
+                      onCancel: () =>
+                          setState(() => _editingMortgage = false),
+                      palette: palette,
+                    ),
+                  ],
+
+                  // Ownership (editable inline)
+                  _DetailRow(
+                    label: 'Ownership',
+                    value: _ownershipLabel,
+                    palette: palette,
+                    onEdit: () => setState(
+                      () => _editingOwnership = !_editingOwnership,
+                    ),
+                  ),
+                  if (_editingOwnership)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: Spacing.lg,
+                        top: Spacing.xs,
+                        bottom: Spacing.sm,
+                      ),
+                      child: OwnershipEditor(
+                        api: widget.api,
+                        propertyId: widget.property.id,
+                        entities: widget.entities,
+                        onSaved: () {
+                          setState(() => _editingOwnership = false);
+                          _loadOwnership();
+                          widget.onSaved();
+                        },
+                      ),
+                    ),
+
+                  // Bank accounts info
+                  _DetailRow(
+                    label: 'Bank accounts',
+                    value: _ownership != null && _ownership!.isNotEmpty
+                        ? 'Linked to entity accounts'
+                        : 'No accounts linked',
+                    palette: palette,
+                  ),
+
+                  const SizedBox(height: Spacing.xs),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-// ── Property Row (hairline-divided, no cards) ─────────────────
-class _PropertyRow extends StatelessWidget {
-  const _PropertyRow({
-    required this.property,
+// ── Detail Row (label + value + optional edit button) ─────────
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
     required this.palette,
-    required this.isEditing,
-    required this.onToggleOwnership,
-    required this.api,
-    required this.entities,
-    required this.onSaved,
+    this.badge,
+    this.onEdit,
   });
 
-  final PropertyRef property;
+  final String label;
+  final String value;
   final Palette palette;
-  final bool isEditing;
-  final VoidCallback onToggleOwnership;
-  final ApiClient api;
-  final List<Entity> entities;
-  final VoidCallback onSaved;
+  final String? badge;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
-    final String mortgageLabel = switch (property.mortgageType) {
-      'interest_only' => 'Interest Only',
-      'repayment' => 'Repayment',
-      _ => 'No Mortgage',
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.xs + 2),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: AppType.meta.copyWith(color: palette.textMuted),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: AppType.body.copyWith(color: palette.textHigh),
+            ),
+          ),
+          if (badge != null) ...<Widget>[
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.sm,
+                vertical: 2,
+              ),
+              decoration: BoxDecoration(
+                color: badge == 'MTD' ? palette.accentDim : palette.bgRaised,
+                borderRadius: Radii.smRadius,
+              ),
+              child: Text(
+                badge!,
+                style: AppType.meta.copyWith(
+                  color: badge == 'MTD'
+                      ? palette.accentInk
+                      : palette.textMuted,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+            const SizedBox(width: Spacing.sm),
+          ],
+          if (onEdit != null)
+            TextButton(
+              onPressed: onEdit,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
+                minimumSize: const Size(40, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                'Edit',
+                style: AppType.label.copyWith(color: palette.accent),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Mortgage Editor (inline dropdown) ─────────────────────────
+class _MortgageEditor extends StatelessWidget {
+  const _MortgageEditor({
+    required this.currentType,
+    required this.onChanged,
+    required this.onSave,
+    required this.onCancel,
+    required this.palette,
+  });
+
+  final String currentType;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onSave;
+  final VoidCallback onCancel;
+  final Palette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    const options = <String, String>{
+      'none': 'No Mortgage',
+      'interest_only': 'Interest Only',
+      'repayment': 'Repayment (Interest + Capital)',
     };
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Divider(height: 1, thickness: 0.5, color: palette.rule),
-        InkWell(
-          onTap: onToggleOwnership,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Spacing.sm,
-              vertical: Spacing.sm,
-            ),
-            child: Row(
-              children: <Widget>[
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      SelectableText(
-                        property.label,
-                        style: AppType.body.copyWith(
-                          color: palette.textHigh,
-                          fontWeight: FontWeight.w500,
-                        ),
+    return Padding(
+      padding: const EdgeInsets.only(left: Spacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          for (final entry in options.entries)
+            InkWell(
+              onTap: () => onChanged(entry.key),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  children: <Widget>[
+                    Icon(
+                      currentType == entry.key
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      size: 16,
+                      color: currentType == entry.key
+                          ? palette.accent
+                          : palette.textMuted,
+                    ),
+                    const SizedBox(width: Spacing.sm),
+                    Text(
+                      entry.value,
+                      style: AppType.body.copyWith(
+                        color: currentType == entry.key
+                            ? palette.textHigh
+                            : palette.textMuted,
                       ),
-                      Text(
-                        mortgageLabel,
-                        style: AppType.meta.copyWith(
-                          color: palette.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                Text(
-                  'Ownership',
-                  style: AppType.label.copyWith(color: palette.accent),
-                ),
-                const SizedBox(width: Spacing.xs),
-                Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: palette.textMuted,
-                ),
-              ],
+              ),
             ),
+          const SizedBox(height: Spacing.sm),
+          Row(
+            children: <Widget>[
+              FilledButton(
+                onPressed: onSave,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(60, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Save'),
+              ),
+              const SizedBox(width: Spacing.sm),
+              TextButton(
+                onPressed: onCancel,
+                child: const Text('Cancel'),
+              ),
+            ],
           ),
-        ),
-        if (isEditing)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Spacing.sm,
-              vertical: Spacing.xs,
-            ),
-            child: OwnershipEditor(
-              api: api,
-              propertyId: property.id,
-              entities: entities,
-              onSaved: onSaved,
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

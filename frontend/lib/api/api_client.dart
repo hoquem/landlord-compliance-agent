@@ -154,6 +154,9 @@ abstract class ApiClient {
   /// rule without reading the rest first.
   Future<void> setOwnership(String propertyId, List<OwnershipShare> shares);
 
+  /// Update a property's fields (mortgage_type, etc).
+  Future<void> updateProperty(String propertyId, {String? mortgageType});
+
   /// Bank names the parser accepts.
   ///
   /// Fetched rather than hard-coded: `core/parser.py`'s registry is the
