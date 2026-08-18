@@ -52,6 +52,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   String _searchQuery = '';
   int _keyboardFocusIndex = 0;
   final FocusNode _keyboardFocusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
 
   /// Interest inputs, one per repayment-mortgage row.
   ///
@@ -73,6 +74,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   @override
   void dispose() {
     _keyboardFocusNode.dispose();
+    _scrollController.dispose();
     for (final TextEditingController c in _interest.values) {
       c.dispose();
     }
@@ -86,7 +88,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (_txns == null || _txns!.isEmpty) return KeyEventResult.ignored;
     // Only handle key down events
     if (event.runtimeType.toString() != 'KeyDownEvent') {
-      // Fallback: check if it's a repeat or down by checking the character
       if (event.character == null || event.character!.isEmpty) {
         return KeyEventResult.ignored;
       }
@@ -101,10 +102,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.keyJ || key == LogicalKeyboardKey.arrowDown) {
       setState(() => _keyboardFocusIndex = (_keyboardFocusIndex + 1).clamp(0, filtered.length - 1));
+      _scrollToFocused();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyK || key == LogicalKeyboardKey.arrowUp) {
       setState(() => _keyboardFocusIndex = (_keyboardFocusIndex - 1).clamp(0, filtered.length - 1));
+      _scrollToFocused();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.space) {
@@ -113,7 +116,93 @@ class _ReviewScreenState extends State<ReviewScreen> {
       });
       return KeyEventResult.handled;
     }
+    // Enter — confirm the focused row (single-item batch)
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      if (!current.needsDecision) return KeyEventResult.ignored;
+      final String? cat = _categoryFor(current);
+      if (cat == null) return KeyEventResult.ignored;
+      _confirmSingle(current);
+      return KeyEventResult.handled;
+    }
+    // X — exclude the focused row
+    if (key == LogicalKeyboardKey.keyX) {
+      if (!current.needsDecision) return KeyEventResult.ignored;
+      _excludeSingle(current);
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
+  }
+
+  void _scrollToFocused() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      final double target = _keyboardFocusIndex * 72.0; // approx row height
+      _scrollController.animateTo(
+        target.clamp(0.0, _scrollController.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _confirmSingle(Txn txn) async {
+    final String? cat = _categoryFor(txn);
+    if (cat == null) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.confirmBatch([
+        ConfirmItem(
+          transactionId: txn.id,
+          hmrcCategory: cat,
+          allowableAmount: _needsInterest(txn) ? _interestFor(txn) : null,
+        ),
+      ]);
+      if (!mounted) return;
+      _selected.remove(txn.id);
+      _overrides.remove(txn.id);
+      setState(() => _busy = false);
+      await _load();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  Future<void> _excludeSingle(Txn txn) async {
+    setState(() => _busy = true);
+    try {
+      await widget.api.confirmBatch([
+        ConfirmItem(
+          transactionId: txn.id,
+          hmrcCategory: 'personal_non_business',
+          allowableAmount: null,
+        ),
+      ]);
+      if (!mounted) return;
+      _selected.remove(txn.id);
+      setState(() => _busy = false);
+      await _load();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  void _selectAllOutstanding() {
+    final filtered = _filteredTxns();
+    setState(() {
+      for (final txn in filtered) {
+        if (txn.needsDecision && _categoryFor(txn) != null) {
+          _selected.add(txn.id);
+        }
+      }
+    });
   }
 
   List<Txn> _filteredTxns() {
@@ -295,6 +384,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         onKeyEvent: _handleKeyEvent,
         autofocus: true,
         child: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.only(bottom: Spacing.xl),
         children: <Widget>[
           // Search bar for finding transactions quickly
@@ -325,44 +415,61 @@ class _ReviewScreenState extends State<ReviewScreen> {
               ),
             ),
           if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(Spacing.xl),
-              child: Text(
-                '$_error.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: palette.danger),
-              ),
-            ),
+            _ErrorLine(message: _error!, onRetry: _load),
           if (_txns != null && txns.isEmpty) const _NothingToReview(),
           if (_txns != null && txns.isNotEmpty && outstanding == 0)
             const _QueueCleared(),
-          for (final Txn txn in filtered)
+          // Select all outstanding + keyboard hint
+          if (_txns != null && txns.isNotEmpty && outstanding > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Spacing.lg, Spacing.xs, Spacing.lg, Spacing.xs,
+              ),
+              child: Row(
+                children: <Widget>[
+                  TextButton.icon(
+                    onPressed: _selectAllOutstanding,
+                    icon: const Icon(Icons.done_all, size: 16),
+                    label: const Text('Select all proposed'),
+                  ),
+                  const SizedBox(width: Spacing.md),
+                  Text(
+                    'J/K move · Enter confirm · X exclude · Space select',
+                    style: AppType.meta.copyWith(
+                      color: palette.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          for (int i = 0; i < filtered.length; i++)
             _ReviewRow(
-              txn: txn,
-              category: _categoryFor(txn),
-              property: _propertyFor(txn),
-              entityName: _entityNameFor(txn),
-              selected: _selected.contains(txn.id),
-              interestController: _needsInterest(txn)
-                  ? _interestController(txn)
+              txn: filtered[i],
+              category: _categoryFor(filtered[i]),
+              property: _propertyFor(filtered[i]),
+              entityName: _entityNameFor(filtered[i]),
+              selected: _selected.contains(filtered[i].id),
+              isFocused: i == _keyboardFocusIndex,
+              interestController: _needsInterest(filtered[i])
+                  ? _interestController(filtered[i])
                   : null,
-              interestProblem: _interestProblem(txn),
-              interestSettled: !_needsInterest(txn) || _interestFor(txn) != null,
+              interestProblem: _interestProblem(filtered[i]),
+              interestSettled: !_needsInterest(filtered[i]) || _interestFor(filtered[i]) != null,
               onInterestChanged: () => setState(() {}),
               onToggle: () => setState(() {
-                if (!_selected.remove(txn.id)) _selected.add(txn.id);
+                if (!_selected.remove(filtered[i].id)) _selected.add(filtered[i].id);
               }),
               onPickCategory: (BuildContext anchor) async {
                 final String? chosen = await pickCategory(
                   anchor,
                   categories: _categories,
-                  current: _categoryFor(txn),
+                  current: _categoryFor(filtered[i]),
                 );
                 if (chosen == null || !mounted) return;
                 setState(() {
-                  _overrides[txn.id] = chosen;
-                  _selected.add(txn.id);
+                  _overrides[filtered[i].id] = chosen;
+                  _selected.add(filtered[i].id);
                 });
               },
             ),
@@ -395,6 +502,7 @@ class _ReviewRow extends StatelessWidget {
     required this.property,
     required this.entityName,
     required this.selected,
+    required this.isFocused,
     required this.onToggle,
     required this.interestController,
     required this.interestProblem,
@@ -408,6 +516,7 @@ class _ReviewRow extends StatelessWidget {
   final PropertyRef? property;
   final String? entityName;
   final bool selected;
+  final bool isFocused;
   final VoidCallback onToggle;
 
   /// Non-null only when this payment mixes interest with capital.
@@ -439,7 +548,18 @@ class _ReviewRow extends StatelessWidget {
     return Column(
       children: <Widget>[
         Container(
-          color: selected ? palette.bgSurface : null,
+          decoration: BoxDecoration(
+            color: selected
+                ? palette.bgSurface
+                : isFocused
+                    ? palette.bgSurface.withValues(alpha: 0.5)
+                    : null,
+            border: isFocused
+                ? Border(
+                    left: BorderSide(width: 2, color: palette.accent),
+                  )
+                : null,
+          ),
           padding: const EdgeInsets.symmetric(
             horizontal: Spacing.xl,
             vertical: Spacing.sm + Spacing.xs,
@@ -686,6 +806,44 @@ class _InterestSplit extends StatelessWidget {
                 color: problem == null ? palette.textMuted : colors.wrong,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Error line with retry — matches Dashboard, Portfolio, and Imports pattern.
+class _ErrorLine extends StatelessWidget {
+  const _ErrorLine({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Spacing.xl, Spacing.lg, Spacing.xl, Spacing.lg,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SelectableText(
+            'Something went wrong loading the review queue.',
+            style: AppType.title.copyWith(color: palette.danger),
+          ),
+          const SizedBox(height: Spacing.xs),
+          SelectableText(
+            message,
+            style: AppType.body.copyWith(color: palette.textMuted),
+          ),
+          const SizedBox(height: Spacing.sm),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Try again'),
           ),
         ],
       ),
