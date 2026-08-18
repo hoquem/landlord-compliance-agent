@@ -270,6 +270,24 @@ const Set<String> kFinanceCostCategories = <String>{
 /// `core/quarters.py` owns the four statutory dates and has unit tests
 /// pinning all of them; a second implementation in Dart would be a second
 /// opinion about a tax deadline, and the failure mode is filing late.
+class EntityCount {
+  const EntityCount({
+    required this.entityId,
+    required this.entityName,
+    required this.needsDecision,
+  });
+
+  factory EntityCount.fromJson(Map<String, dynamic> json) => EntityCount(
+    entityId: json['entity_id'] as String,
+    entityName: json['entity_name'] as String,
+    needsDecision: json['needs_decision'] as int,
+  );
+
+  final String entityId;
+  final String entityName;
+  final int needsDecision;
+}
+
 class DashboardSummary {
   const DashboardSummary({
     required this.needsDecision,
@@ -279,6 +297,7 @@ class DashboardSummary {
     required this.expiredCertificates,
     required this.unreadableImports,
     required this.uncategorisedImports,
+    this.entityBreakdown = const [],
   });
 
   factory DashboardSummary.fromJson(Map<String, dynamic> json) =>
@@ -290,6 +309,10 @@ class DashboardSummary {
         expiredCertificates: json['expired_certificates'] as int,
         unreadableImports: json['unreadable_imports'] as int,
         uncategorisedImports: json['uncategorised_imports'] as int,
+        entityBreakdown: (json['entity_breakdown'] as List<dynamic>?)
+            ?.map((e) => EntityCount.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+            const [],
       );
 
   final int needsDecision;
@@ -303,6 +326,9 @@ class DashboardSummary {
   /// Files that parsed cleanly and whose categorisation then failed.
   /// Deliberately separate: the data is fine and sitting there.
   final int uncategorisedImports;
+
+  /// Per-entity breakdown of needs_decision counts.
+  final List<EntityCount> entityBreakdown;
 
   /// Whether anything at all is outstanding.
   bool get allClear =>

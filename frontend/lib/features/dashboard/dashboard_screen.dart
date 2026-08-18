@@ -113,6 +113,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           goLabel: 'Review',
           onGo: () => context.go('/review'),
         ),
+      // Per-entity breakdown when there are 2+ entities with outstanding work
+      for (final e in s.entityBreakdown)
+        if (e.needsDecision > 0)
+          _Line(
+            text: '  ${e.entityName}: ${e.needsDecision}',
+            state: WorkState.needsYou,
+          ),
       if (s.unreadableImports > 0)
         _Line(
           text: s.unreadableImports == 1

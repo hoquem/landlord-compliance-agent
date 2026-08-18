@@ -34,7 +34,7 @@ from sqlalchemy import func, select
 from src.api.auth import CurrentAuth
 from src.core.certificates import certificate_status, uk_today
 from src.core.quarters import next_update_deadline
-from src.db.models import ComplianceCertificate, Import, Transaction
+from src.db.models import ComplianceCertificate, Entity, Import, Transaction
 from src.db.session import org_session
 
 router = APIRouter(tags=["dashboard"])
@@ -46,6 +46,9 @@ class DashboardRead(BaseModel):
     :ivar needs_decision: transactions still ``unclassified`` or
         ``proposed``. Both count: an agent's suggestion nobody accepted is
         not a decision, and an export refuses while one remains.
+    :ivar entity_breakdown: per-entity needs_decision counts, so the user
+        can see which entity's return needs work. Empty when there's only
+        one entity or nothing outstanding.
     :ivar next_deadline: the next statutory quarterly-update date.
     :ivar days_until_deadline: whole days from today, UK clock. Negative if
         the deadline has passed, which is worth showing rather than hiding.
@@ -61,12 +64,20 @@ class DashboardRead(BaseModel):
     """
 
     needs_decision: int
+    entity_breakdown: list["EntityCount"] = []
     next_deadline: datetime.date
     days_until_deadline: int
     expiring_certificates: int
     expired_certificates: int
     unreadable_imports: int
     uncategorised_imports: int
+
+
+class EntityCount(BaseModel):
+    """Per-entity count for the dashboard breakdown."""
+    entity_id: str
+    entity_name: str
+    needs_decision: int
 
 
 @router.get("/dashboard")
@@ -115,9 +126,36 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
                 case "expired":
                     expired += 1
 
+        # Per-entity breakdown of needs_decision counts
+        entity_rows = await session.execute(
+            select(
+                Entity.id,
+                Entity.name,
+                func.count(Transaction.id).label("cnt"),
+            )
+            .select_from(Transaction)
+            .join(Entity, Entity.id == Transaction.entity_id)
+            .where(
+                Transaction.org_id == auth.org_id,
+                Transaction.status.in_(("unclassified", "proposed")),
+            )
+            .group_by(Entity.id, Entity.name)
+            .order_by(func.count(Transaction.id).desc())
+        )
+        entity_breakdown = [
+            EntityCount(
+                entity_id=str(row.id),
+                entity_name=row.name,
+                needs_decision=row.cnt,
+            )
+            for row in entity_rows
+            if row.cnt > 0
+        ]
+
     deadline = next_update_deadline(today)
     return DashboardRead(
         needs_decision=needs_decision or 0,
+        entity_breakdown=entity_breakdown,
         next_deadline=deadline,
         days_until_deadline=(deadline - today).days,
         expiring_certificates=expiring,
