@@ -12,6 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/auth/auth_session.dart';
 import '../theme/tokens.dart';
 import 'destinations.dart';
 
@@ -19,10 +20,16 @@ import 'destinations.dart';
 const double kRailCollapseWidth = 900;
 
 class AppShell extends StatelessWidget {
-  const AppShell({required this.child, required this.location, super.key});
+  const AppShell({
+    required this.child,
+    required this.location,
+    required this.auth,
+    super.key,
+  });
 
   final Widget child;
   final String location;
+  final AuthSession auth;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +47,7 @@ class AppShell extends StatelessWidget {
             onDestinationSelected: (int index) =>
                 context.go(kDestinations[index].path),
             leading: _RailHeading(extended: extended),
+            trailing: _SignOutButton(auth: auth, extended: extended),
             destinations: <NavigationRailDestination>[
               for (final Destination d in kDestinations)
                 NavigationRailDestination(
@@ -79,6 +87,48 @@ class _RailHeading extends StatelessWidget {
         child: Text(
           'Landlord Compliance',
           style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+    );
+  }
+}
+
+class _SignOutButton extends StatelessWidget {
+  const _SignOutButton({required this.auth, required this.extended});
+
+  final AuthSession auth;
+  final bool extended;
+
+  @override
+  Widget build(BuildContext context) {
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+
+    if (!extended) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: Spacing.md),
+        child: IconButton(
+          icon: const Icon(Icons.logout_outlined),
+          tooltip: 'Sign out',
+          onPressed: () => auth.signOut(),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: Spacing.md,
+        right: Spacing.md,
+        bottom: Spacing.lg,
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: () => auth.signOut(),
+          icon: Icon(Icons.logout_outlined, size: 18, color: palette.textMuted),
+          label: Text(
+            'Sign out',
+            style: AppType.label.copyWith(color: palette.textMuted),
+          ),
         ),
       ),
     );

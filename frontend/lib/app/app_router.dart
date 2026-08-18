@@ -75,7 +75,7 @@ GoRouter buildRouter({
       ),
       ShellRoute(
         builder: (BuildContext context, GoRouterState state, Widget child) =>
-            AppShell(location: state.uri.path, child: child),
+            AppShell(location: state.uri.path, auth: auth, child: child),
         routes: <RouteBase>[
           GoRoute(
             path: '/',

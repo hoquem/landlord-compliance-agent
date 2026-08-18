@@ -8,3 +8,8 @@
 # public. evals/golden_set.jsonl stays synthetic so the harness runs out of
 # the box; this one never leaves the machine.
 backend/evals/golden_set.real.jsonl
+node_modules/
+detect_out.json
+detect_stderr.txt
+package.json
+package-lock.json

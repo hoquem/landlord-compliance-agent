@@ -19,6 +19,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../api/api_client.dart';
 import '../../api/models.dart';
@@ -48,6 +49,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
   List<String> _categories = <String>[];
   final Set<String> _selected = <String>{};
   String _searchQuery = '';
+  int _keyboardFocusIndex = 0;
+  final FocusNode _keyboardFocusNode = FocusNode();
 
   /// Interest inputs, one per repayment-mortgage row.
   ///
@@ -64,6 +67,63 @@ class _ReviewScreenState extends State<ReviewScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _keyboardFocusNode.dispose();
+    for (final TextEditingController c in _interest.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Keyboard shortcuts for the review queue (DESIGN.md spec):
+  /// J/↓ — move down, K/↑ — move up, Enter — confirm, X — exclude,
+  /// Space — toggle selection for batch confirm, C — open category picker.
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (_txns == null || _txns!.isEmpty) return KeyEventResult.ignored;
+    // Only handle key down events
+    if (event.runtimeType.toString() != 'KeyDownEvent') {
+      // Fallback: check if it's a repeat or down by checking the character
+      if (event.character == null || event.character!.isEmpty) {
+        return KeyEventResult.ignored;
+      }
+    }
+
+    final List<Txn> filtered = _filteredTxns();
+    if (filtered.isEmpty) return KeyEventResult.ignored;
+
+    final int idx = _keyboardFocusIndex.clamp(0, filtered.length - 1);
+    final Txn current = filtered[idx];
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.keyJ || key == LogicalKeyboardKey.arrowDown) {
+      setState(() => _keyboardFocusIndex = (_keyboardFocusIndex + 1).clamp(0, filtered.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyK || key == LogicalKeyboardKey.arrowUp) {
+      setState(() => _keyboardFocusIndex = (_keyboardFocusIndex - 1).clamp(0, filtered.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.space) {
+      setState(() {
+        if (!_selected.remove(current.id)) _selected.add(current.id);
+      });
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  List<Txn> _filteredTxns() {
+    final List<Txn> txns = _txns ?? <Txn>[];
+    if (_searchQuery.isEmpty) return txns;
+    final String q = _searchQuery.toLowerCase();
+    return txns.where((Txn t) {
+      return t.description.toLowerCase().contains(q) ||
+          (t.hmrcCategory?.toLowerCase().contains(q) ?? false) ||
+          t.amount.toString().contains(q);
+    }).toList();
   }
 
   Future<void> _load() async {
@@ -98,14 +158,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
       return a.date.compareTo(b.date);
     });
     return sorted;
-  }
-
-  @override
-  void dispose() {
-    for (final TextEditingController c in _interest.values) {
-      c.dispose();
-    }
-    super.dispose();
   }
 
   String? _categoryFor(Txn txn) => _overrides[txn.id] ?? txn.hmrcCategory;
@@ -213,15 +265,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final Palette palette = Palette.of(Theme.of(context).brightness);
     final List<Txn> txns = _txns ?? <Txn>[];
     final int outstanding = txns.where((Txn t) => t.needsDecision).length;
-    // Filter by search query — matches description, category, or amount.
-    final List<Txn> filtered = _searchQuery.isEmpty
-        ? txns
-        : txns.where((Txn t) {
-            final String q = _searchQuery.toLowerCase();
-            return t.description.toLowerCase().contains(q) ||
-                (t.hmrcCategory?.toLowerCase().contains(q) ?? false) ||
-                t.amount.toString().contains(q);
-          }).toList();
+    final List<Txn> filtered = _filteredTxns();
 
     return ScreenScaffold(
       title: 'Review',
@@ -243,7 +287,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
                           '${_uncertainSelected > 0 ? ' · $_uncertainSelected uncertain' : ''}',
               ),
             ),
-      child: ListView(
+      child: Focus(
+        focusNode: _keyboardFocusNode,
+        onKeyEvent: _handleKeyEvent,
+        autofocus: true,
+        child: ListView(
         padding: const EdgeInsets.only(bottom: Spacing.xl),
         children: <Widget>[
           // Search bar for finding transactions quickly
@@ -315,6 +363,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               },
             ),
         ],
+        ),
       ),
     );
   }

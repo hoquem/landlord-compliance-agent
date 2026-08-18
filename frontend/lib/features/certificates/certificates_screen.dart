@@ -183,7 +183,35 @@ class _PropertyGroup extends StatelessWidget {
                       tooltip: 'Remove',
                       iconSize: 18,
                       icon: const Icon(Icons.close),
-                      onPressed: () => onDelete(c.id),
+                      onPressed: () async {
+                        final bool? confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (BuildContext ctx) => AlertDialog(
+                            title: const Text('Remove certificate?'),
+                            content: Text(
+                              'Remove ${categoryLabel(c.certificateType)} '
+                              'expiring ${_expiry(c.expiryDate)}?\n\n'
+                              'This cannot be undone.',
+                            ),
+                            actions: <Widget>[
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: palette.danger,
+                                ),
+                                child: const Text('Remove'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirm == true) {
+                          await onDelete(c.id);
+                        }
+                      },
                     ),
                   ],
                 ),

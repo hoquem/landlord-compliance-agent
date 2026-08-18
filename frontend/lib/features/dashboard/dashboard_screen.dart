@@ -1,10 +1,18 @@
 /// What is waiting on you, and when it is due.
 ///
-/// Redesigned as a property investor dashboard:
-///   - Deadline countdown hero
-///   - Action items with status indicators
-///   - Quick metrics (review queue, compliance, imports)
-///   - Export panel inline
+/// **Not a card grid.** The plan asked for cards; `DESIGN.md` bans identical
+/// card grids and the hero-metric template outright, and "generic SaaS
+/// dashboard" is a named anti-reference. Three boxes with big numbers would
+/// be exactly that, and would answer a question nobody has — this product
+/// has no vanity metric worth 48pt.
+///
+/// So the dashboard is a short list of statements, each one a thing to do
+/// with somewhere to go. It reads as prose because that is what the
+/// information is: *47 lines need a decision. Q2 is due on 7 November.*
+///
+/// **The deadline is rendered, never computed.** It arrives from
+/// `GET /dashboard`, which calls `core/quarters.py`. A second implementation
+/// here would be a second opinion about a statutory date.
 library;
 
 import 'package:flutter/material.dart';
@@ -54,21 +62,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final Palette palette = Palette.of(Theme.of(context).brightness);
-    final StatusColors colors =
-        Theme.of(context).extension<StatusColors>()!;
     final DashboardSummary? s = _summary;
 
     return ScreenScaffold(
       title: 'Dashboard',
-      action: FilledButton.icon(
+      subtitle: _summary == null
+          ? null
+          : _summary!.allClear
+              ? 'Everything is up to date.'
+              : '${_summary!.needsDecision} ${_summary!.needsDecision == 1 ? "line needs" : "lines need"} a decision.',
+      action: FilledButton(
         onPressed: () => setState(() => _exporting = !_exporting),
-        icon: const Icon(Icons.file_download_outlined, size: 18),
-        label: const Text('Export'),
+        child: Text(_exporting ? 'Close' : 'Export a quarter'),
       ),
       child: ListView(
         padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.lg,
-          vertical: Spacing.sm,
+          horizontal: Spacing.xl,
+          vertical: Spacing.xl,
         ),
         children: <Widget>[
           if (_exporting) ...<Widget>[
@@ -76,473 +86,167 @@ class _DashboardScreenState extends State<DashboardScreen> {
               api: widget.api,
               onClose: () => setState(() => _exporting = false),
             ),
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: Spacing.xl),
           ],
           if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: Spacing.sm),
-              child: SelectableText(
-                '$_error.',
-                style: AppType.body.copyWith(color: palette.danger),
-              ),
-            ),
-          if (s != null) ...<Widget>[
-            // ── Deadline Hero ──
-            _DeadlineHero(summary: s, palette: palette, colors: colors),
-            const SizedBox(height: Spacing.md),
-
-            // ── Metric Grid ──
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                _MetricCard(
-                  label: 'Needs Decision',
-                  value: s.needsDecision,
-                  icon: Icons.pending_actions_outlined,
-                  color: s.needsDecision > 0 ? colors.needsYou : palette.textMuted,
-                  palette: palette,
-                  onTap: s.needsDecision > 0
-                      ? () => context.go('/review')
-                      : null,
-                ),
-                const SizedBox(width: Spacing.sm),
-                _MetricCard(
-                  label: 'Failed Imports',
-                  value: s.unreadableImports + s.uncategorisedImports,
-                  icon: Icons.error_outline,
-                  color: (s.unreadableImports + s.uncategorisedImports) > 0
-                      ? colors.wrong
-                      : palette.textMuted,
-                  palette: palette,
-                  onTap: (s.unreadableImports + s.uncategorisedImports) > 0
-                      ? () => context.go('/imports')
-                      : null,
-                ),
-                const SizedBox(width: Spacing.sm),
-                _MetricCard(
-                  label: 'Expired Certs',
-                  value: s.expiredCertificates,
-                  icon: Icons.warning_amber_outlined,
-                  color: s.expiredCertificates > 0
-                      ? colors.wrong
-                      : palette.textMuted,
-                  palette: palette,
-                  onTap: s.expiredCertificates > 0
-                      ? () => context.go('/certificates')
-                      : null,
-                ),
-                const SizedBox(width: Spacing.sm),
-                _MetricCard(
-                  label: 'Expiring Certs',
-                  value: s.expiringCertificates,
-                  icon: Icons.schedule_outlined,
-                  color: s.expiringCertificates > 0
-                      ? colors.needsYou
-                      : palette.textMuted,
-                  palette: palette,
-                  onTap: s.expiringCertificates > 0
-                      ? () => context.go('/certificates')
-                      : null,
-                ),
-              ],
-            ),
-            const SizedBox(height: Spacing.md),
-
-            // ── Action Items ──
-            if (_hasActions(s)) ...<Widget>[
-              Text(
-                'ACTION REQUIRED',
-                style: AppType.label.copyWith(
-                  color: palette.textMuted,
-                  letterSpacing: 1.2,
-                  fontSize: 11,
-                ),
-              ),
-              const SizedBox(height: Spacing.xs),
-              ..._actionItems(context, s, palette, colors),
-            ],
-
-            // ── All Clear ──
-            if (s.allClear)
-              Container(
-                padding: const EdgeInsets.all(Spacing.lg),
-                decoration: BoxDecoration(
-                  color: palette.bgSurface,
-                  borderRadius: Radii.mdRadius,
-                  border: Border.all(color: palette.rule),
-                ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(
-                      Icons.check_circle_outline,
-                      color: palette.accent,
-                      size: 24,
-                    ),
-                    const SizedBox(width: Spacing.sm),
-                    Expanded(
-                      child: Text(
-                        'Everything is up to date. Nothing is waiting on you.',
-                        style: AppType.body.copyWith(
-                          color: palette.textHigh,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+            _ErrorLine(message: _error!, onRetry: _load),
+          if (s != null) ..._statements(context, s),
         ],
       ),
     );
   }
 
-  bool _hasActions(DashboardSummary s) =>
-      s.needsDecision > 0 ||
-      s.unreadableImports > 0 ||
-      s.uncategorisedImports > 0 ||
-      s.expiredCertificates > 0 ||
-      s.expiringCertificates > 0;
-
-  List<Widget> _actionItems(
-    BuildContext context,
-    DashboardSummary s,
-    Palette palette,
-    StatusColors colors,
-  ) {
-    final List<Widget> items = <Widget>[];
-
-    if (s.needsDecision > 0) {
-      items.add(_ActionRow(
-        icon: Icons.pending_actions_outlined,
-        iconColor: colors.needsYou,
-        title: s.needsDecision == 1
-            ? '1 transaction needs review'
-            : '${s.needsDecision} transactions need review',
-        subtitle: 'Categorise and confirm to unblock exports',
-        palette: palette,
-        onTap: () => context.go('/review'),
-      ));
-    }
-
-    if (s.unreadableImports > 0) {
-      items.add(_ActionRow(
-        icon: Icons.broken_image_outlined,
-        iconColor: colors.wrong,
-        title: s.unreadableImports == 1
-            ? '1 import could not be read'
-            : '${s.unreadableImports} imports could not be read',
-        subtitle: 'Bad input — try a different export format',
-        palette: palette,
-        onTap: () => context.go('/imports'),
-      ));
-    }
-
-    if (s.uncategorisedImports > 0) {
-      items.add(_ActionRow(
-        icon: Icons.psychology_outlined,
-        iconColor: colors.wrong,
-        title: s.uncategorisedImports == 1
-            ? '1 import could not be categorised'
-            : '${s.uncategorisedImports} imports could not be categorised',
-        subtitle: 'Data was read but AI categorisation failed',
-        palette: palette,
-        onTap: () => context.go('/imports'),
-      ));
-    }
-
-    if (s.expiredCertificates > 0) {
-      items.add(_ActionRow(
-        icon: Icons.dangerous_outlined,
-        iconColor: colors.wrong,
-        title: s.expiredCertificates == 1
-            ? '1 certificate has expired'
-            : '${s.expiredCertificates} certificates have expired',
-        subtitle: 'Properties without valid compliance certificates',
-        palette: palette,
-        onTap: () => context.go('/certificates'),
-      ));
-    }
-
-    if (s.expiringCertificates > 0) {
-      items.add(_ActionRow(
-        icon: Icons.schedule_outlined,
-        iconColor: colors.needsYou,
-        title: s.expiringCertificates == 1
-            ? '1 certificate expires within 60 days'
-            : '${s.expiringCertificates} certificates expire within 60 days',
-        subtitle: 'Renew before they lapse',
-        palette: palette,
-        onTap: () => context.go('/certificates'),
-      ));
-    }
-
-    return items;
-  }
-}
-
-// ── Deadline Hero ─────────────────────────────────────────────
-class _DeadlineHero extends StatelessWidget {
-  const _DeadlineHero({
-    required this.summary,
-    required this.palette,
-    required this.colors,
-  });
-
-  final DashboardSummary summary;
-  final Palette palette;
-  final StatusColors colors;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool urgent = summary.daysUntilDeadline <= 14;
-    final bool overdue = summary.daysUntilDeadline < 0;
-    final Color accentColor =
-        overdue ? colors.wrong : (urgent ? colors.needsYou : palette.accent);
-
-    return Container(
-      padding: const EdgeInsets.all(Spacing.lg),
-      decoration: BoxDecoration(
-        color: palette.bgSurface,
-        borderRadius: Radii.mdRadius,
-        border: Border.all(color: palette.rule),
+  List<Widget> _statements(BuildContext context, DashboardSummary s) {
+    return <Widget>[
+      _Line(
+        text: _deadlineSentence(s),
+        state: s.daysUntilDeadline <= 14
+            ? WorkState.needsYou
+            : WorkState.settled,
       ),
-      child: Row(
-        children: <Widget>[
-          // Days remaining — big number
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: accentColor.withValues(alpha: 0.12),
-              borderRadius: Radii.mdRadius,
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                Text(
-                  overdue ? '!' : '${summary.daysUntilDeadline}',
-                  style: AppType.title.copyWith(
-                    color: accentColor,
-                    fontSize: overdue ? 36 : 32,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  overdue ? 'OVERDUE' : 'DAYS',
-                  style: AppType.meta.copyWith(
-                    color: accentColor.withValues(alpha: 0.7),
-                    fontSize: 10,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: Spacing.md),
-          // Deadline text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  overdue
-                      ? 'Your last update was overdue'
-                      : summary.daysUntilDeadline == 0
-                          ? 'Your next update is due today'
-                          : summary.daysUntilDeadline == 1
-                              ? 'Due tomorrow'
-                              : 'Next quarterly update',
-                  style: AppType.title.copyWith(
-                    color: palette.textHigh,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _deadlineDate(summary),
-                  style: AppType.body.copyWith(color: palette.textMuted),
-                ),
-                const SizedBox(height: Spacing.xs),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: Spacing.sm,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.12),
-                    borderRadius: Radii.smRadius,
-                  ),
-                  child: Text(
-                    urgent ? 'ACTION NEEDED' : 'ON TRACK',
-                    style: AppType.meta.copyWith(
-                      color: accentColor,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 10,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+      if (s.needsDecision > 0)
+        _Line(
+          text: s.needsDecision == 1
+              ? '1 line needs a decision.'
+              : '${s.needsDecision} lines need a decision.',
+          state: WorkState.needsYou,
+          goLabel: 'Review',
+          onGo: () => context.go('/review'),
+        ),
+      if (s.unreadableImports > 0)
+        _Line(
+          text: s.unreadableImports == 1
+              ? '1 import could not be read.'
+              : '${s.unreadableImports} imports could not be read.',
+          state: WorkState.wrong,
+          goLabel: 'Imports',
+          onGo: () => context.go('/imports'),
+        ),
+      if (s.uncategorisedImports > 0)
+        _Line(
+          text: s.uncategorisedImports == 1
+              ? '1 import was read but could not be categorised.'
+              : '${s.uncategorisedImports} imports were read but could not be '
+                    'categorised.',
+          state: WorkState.wrong,
+          goLabel: 'Imports',
+          onGo: () => context.go('/imports'),
+        ),
+      if (s.expiredCertificates > 0)
+        _Line(
+          text: s.expiredCertificates == 1
+              ? '1 certificate has lapsed.'
+              : '${s.expiredCertificates} certificates have lapsed.',
+          state: WorkState.wrong,
+          goLabel: 'Certificates',
+          onGo: () => context.go('/certificates'),
+        ),
+      if (s.expiringCertificates > 0)
+        _Line(
+          text: s.expiringCertificates == 1
+              ? '1 certificate lapses within 60 days.'
+              : '${s.expiringCertificates} certificates lapse within 60 days.',
+          state: WorkState.needsYou,
+          goLabel: 'Certificates',
+          onGo: () => context.go('/certificates'),
+        ),
+      if (s.allClear)
+        const _Line(
+          text: 'Nothing else is waiting on you.',
+          state: WorkState.settled,
+        ),
+    ];
   }
 
-  static String _deadlineDate(DashboardSummary s) {
+  static String _deadlineSentence(DashboardSummary s) {
     const List<String> months = <String>[
       'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December',
     ];
-    return '${s.nextDeadline.day} ${months[s.nextDeadline.month - 1]} ${s.nextDeadline.year}';
+    final String when =
+        '${s.nextDeadline.day} ${months[s.nextDeadline.month - 1]}';
+    if (s.daysUntilDeadline < 0) return 'Your last update was due on $when.';
+    if (s.daysUntilDeadline == 0) return 'Your next update is due today.';
+    if (s.daysUntilDeadline == 1) return 'Your next update is due tomorrow, $when.';
+    return 'Your next update is due on $when, in ${s.daysUntilDeadline} days.';
   }
 }
 
-// ── Metric Card ───────────────────────────────────────────────
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    required this.palette,
-    this.onTap,
-  });
+/// A proper error line with retry — matches the Imports screen pattern.
+class _ErrorLine extends StatelessWidget {
+  const _ErrorLine({required this.message, required this.onRetry});
 
-  final String label;
-  final int value;
-  final IconData icon;
-  final Color color;
-  final Palette palette;
-  final VoidCallback? onTap;
+  final String message;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final bool actionable = onTap != null;
-    final bool isZero = value == 0;
+    final Palette palette = Palette.of(Theme.of(context).brightness);
 
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: Radii.smRadius,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Spacing.sm,
-            vertical: Spacing.sm,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SelectableText(
+            'Something went wrong loading the dashboard.',
+            style: AppType.title.copyWith(color: palette.danger),
           ),
-          decoration: BoxDecoration(
-            color: palette.bgSurface,
-            borderRadius: Radii.smRadius,
-            border: Border.all(
-              color: actionable ? color.withValues(alpha: 0.3) : palette.rule,
-            ),
+          const SizedBox(height: Spacing.xs),
+          SelectableText(
+            message,
+            style: AppType.body.copyWith(color: palette.textMuted),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Icon(icon, size: 14, color: color),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: AppType.meta.copyWith(
-                        color: palette.textMuted,
-                        fontSize: 10,
-                        letterSpacing: 0.5,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '$value',
-                style: AppType.title.copyWith(
-                  color: isZero ? palette.textMuted : color,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
+          const SizedBox(height: Spacing.sm),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Try again'),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-// ── Action Row ────────────────────────────────────────────────
-class _ActionRow extends StatelessWidget {
-  const _ActionRow({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.palette,
-    this.onTap,
+/// One statement, with somewhere to go if there is something to do.
+class _Line extends StatelessWidget {
+  const _Line({
+    required this.text,
+    required this.state,
+    this.goLabel,
+    this.onGo,
   });
 
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final Palette palette;
-  final VoidCallback? onTap;
+  final String text;
+  final WorkState state;
+  final String? goLabel;
+  final VoidCallback? onGo;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: Radii.smRadius,
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.md,
-          vertical: Spacing.sm,
-        ),
-        margin: const EdgeInsets.only(bottom: Spacing.xs),
-        decoration: BoxDecoration(
-          color: palette.bgSurface,
-          borderRadius: Radii.smRadius,
-          border: Border.all(color: palette.rule),
-        ),
-        child: Row(
-          children: <Widget>[
-            Icon(icon, size: 20, color: iconColor),
-            const SizedBox(width: Spacing.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  SelectableText(
-                    title,
-                    style: AppType.body.copyWith(
-                      color: palette.textHigh,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: AppType.meta.copyWith(
-                      color: palette.textMuted,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+    final StatusColors colors = Theme.of(context).extension<StatusColors>()!;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.lg),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          Expanded(
+            child: SelectableText(
+              text,
+              style: AppType.title.copyWith(
+                color: switch (state) {
+                  WorkState.settled => palette.textMuted,
+                  WorkState.wrong => colors.wrong,
+                  _ => palette.textHigh,
+                },
               ),
             ),
-            if (onTap != null)
-              Icon(
-                Icons.chevron_right,
-                size: 18,
-                color: palette.textMuted,
-              ),
-          ],
-        ),
+          ),
+          if (goLabel != null)
+            TextButton(onPressed: onGo, child: Text(goLabel!)),
+        ],
       ),
     );
   }
