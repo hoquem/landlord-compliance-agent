@@ -26,6 +26,8 @@ const List<String> kCertificateTypes = <String>[
   'epc',
   'hmo_licence',
   'selective_licence',
+  'deposit_protection',
+  'electrical_safety',
 ];
 
 class CertificateForm extends StatefulWidget {

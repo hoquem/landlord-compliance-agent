@@ -220,6 +220,10 @@ class _PropertyPanelState extends State<_PropertyPanel> {
     'gas_safety' => 'Gas Safety',
     'eicr' => 'EICR',
     'epc' => 'EPC',
+    'hmo_licence' => 'HMO Licence',
+    'selective_licence' => 'Selective Licence',
+    'deposit_protection' => 'Deposit Protection',
+    'electrical_safety' => 'Electrical Safety',
     _ => type,
   };
 
@@ -426,7 +430,7 @@ class _PropertyPanelState extends State<_PropertyPanel> {
                     ),
                     const SizedBox(height: Spacing.xs),
                     Text(
-                      'None on file. Add gas safety, EICR and EPC in the Certificates tab.',
+                      'None on file. Add gas safety, EICR, EPC, deposit protection and electrical safety in the Certificates tab.',
                       style: AppType.meta.copyWith(color: palette.textMuted),
                     ),
                   ],
