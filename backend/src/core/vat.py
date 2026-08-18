@@ -17,7 +17,7 @@ splitting is therefore a manual review action, not an auto-split.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 
 def split_vat(
@@ -39,8 +39,12 @@ def split_vat(
         raise ValueError(f"gross must be non-negative, got {gross}")
     if vat_rate < 0:
         raise ValueError(f"vat_rate must be non-negative, got {vat_rate}")
+    if gross != gross.quantize(Decimal("0.01")):
+        raise ValueError(
+            f"gross must be at penny precision (max 2 decimal places), got {gross}"
+        )
 
-    divisor = Decimal("1") + vat_rate / Decimal("100")
+    divisor = Decimal(1) + vat_rate / Decimal(100)
     net = (gross / divisor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     vat = gross - net
     return net, vat

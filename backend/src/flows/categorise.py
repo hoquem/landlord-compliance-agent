@@ -244,6 +244,32 @@ def _build_llm() -> LLM:
     return LLM(model=model, base_url=base_url)
 
 
+def _sanitize_description(text: str) -> str:
+    """Strip characters that could be used for prompt injection.
+
+    Bank statement descriptions come from third parties (tenants,
+    suppliers) who could craft payment references to manipulate the LLM
+    into mis-categorising transactions. Since the output drives tax
+    figures, this is an integrity attack on the ledger.
+
+    Strips:
+    - Double quotes (would break the ``description="..."`` format)
+    - Newlines and carriage returns (would inject new lines into the prompt)
+    - Control characters
+
+    :param text: the raw bank description.
+    :returns: a sanitised version safe to embed in an LLM prompt.
+    """
+    # Replace double quotes with single quotes to preserve meaning
+    text = text.replace('"', "'")
+    # Strip newlines and control characters
+    text = text.replace("\n", " ").replace("\r", " ")
+    # Collapse multiple spaces
+    import re
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _build_prompt(
     lines: list[StatementLineInput],
     properties: list[OrgProperty],
@@ -264,7 +290,7 @@ def _build_prompt(
     """
     lines_block = "\n".join(
         f"{i}. date={line.date.isoformat()} "
-        f'description="{line.description}" amount={line.amount}'
+        f'description="{_sanitize_description(line.description)}" amount={line.amount}'
         for i, line in enumerate(lines)
     )
 
@@ -275,7 +301,7 @@ def _build_prompt(
 
     if few_shot:
         few_shot_block = "\n".join(
-            f'- description="{ex.description}" amount={ex.amount} -> '
+            f'- description="{_sanitize_description(ex.description)}" amount={ex.amount} -> '
             f"category={ex.hmrc_category.value} property_id={ex.property_id}"
             for ex in few_shot
         )

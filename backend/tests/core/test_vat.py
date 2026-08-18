@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.vat import VatSplitResult, maybe_split_vat, split_vat
+from src.core.vat import maybe_split_vat, split_vat
 
 
 class TestSplitVat:
@@ -45,7 +45,7 @@ class TestSplitVat:
     def test_net_plus_vat_always_equals_gross(self):
         """Invariant: net + vat == gross for any valid input."""
         for gross_pence in range(100, 100000, 137):
-            gross = Decimal(gross_pence) / Decimal("100")
+            gross = Decimal(gross_pence) / Decimal(100)
             net, vat = split_vat(gross, Decimal("20.00"))
             assert net + vat == gross, f"failed for gross={gross}"
 
@@ -56,6 +56,15 @@ class TestSplitVat:
     def test_negative_rate_raises(self):
         with pytest.raises(ValueError, match="non-negative"):
             split_vat(Decimal("100.00"), Decimal("-5.00"))
+
+    def test_subpenny_input_raises(self):
+        """Gross with more than 2 decimal places should be rejected."""
+        with pytest.raises(ValueError, match="penny precision"):
+            split_vat(Decimal("100.005"), Decimal("20.00"))
+
+    def test_three_decimal_places_raises(self):
+        with pytest.raises(ValueError, match="penny precision"):
+            split_vat(Decimal("99.999"), Decimal("20.00"))
 
 
 class TestMaybeSplitVat:

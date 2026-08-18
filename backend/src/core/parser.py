@@ -170,6 +170,38 @@ def _parse_generic_amount(raw: str) -> Decimal:
         raise ValueError(f"unparseable amount: {raw!r}") from exc
 
 
+#: Month abbreviation → month number, locale-independent.
+#: Nationwide exports ``%b`` month names (e.g. "Oct"); ``strptime("%b")``
+#: depends on the host locale and breaks under non-English locales.
+_NATIONWIDE_MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def _parse_nationwide_date(raw: str) -> date:
+    """Parse a Nationwide date (``"28 Oct 2024"``) without locale dependency.
+
+    :param raw: raw date cell, e.g. ``"28 Oct 2024"``.
+    :raises ValueError: if the format or month name is unrecognised.
+    """
+    parts = raw.strip().split()
+    if len(parts) != 3:
+        raise ValueError(f"unparseable Nationwide date: {raw!r}")
+    day_str, month_str, year_str = parts
+    try:
+        day = int(day_str)
+        year = int(year_str)
+    except ValueError as exc:
+        raise ValueError(f"unparseable Nationwide date: {raw!r}") from exc
+    month = _NATIONWIDE_MONTHS.get(month_str)
+    if month is None:
+        raise ValueError(
+            f"unrecognised month in Nationwide date: {month_str!r}"
+        )
+    return date(year, month, day)
+
+
 def _parse_generic_row(row: list[str], row_number: int) -> ParsedLine:
     """Parse one data row of the generic ``Date,Description,Amount,Balance`` format.
 
@@ -271,11 +303,7 @@ def _parse_nationwide_row(row: list[str], row_number: int) -> ParsedLine:
     raw_date, txn_type, description, raw_out, raw_in, _raw_balance = row
 
     try:
-        # `dd Mon yyyy`, e.g. "28 Oct 2024". Naive by design, as in
-        # _parse_generic_date: a statement date is a calendar date with no
-        # timezone concept, and the datetime is an intermediate discarded by
-        # .date() on the same line.
-        parsed_date = datetime.strptime(raw_date.strip(), "%d %b %Y").date()  # noqa: DTZ007
+        parsed_date = _parse_nationwide_date(raw_date)
     except ValueError as exc:
         raise StatementParseError(row_number, f"unparseable date: {raw_date!r}") from exc
 
@@ -558,7 +586,7 @@ def _normalise_header(header: list[str]) -> tuple[str, ...]:
     return tuple(cell.strip().casefold() for cell in header)
 
 
-def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
+def parse_statement(path: Path, *, bank: str, max_rows: int = 5000) -> list[ParsedLine]:
     """Parse one bank's statement CSV into :class:`ParsedLine` records.
 
     Never silently skips a bad row: the first unparseable row raises
@@ -566,10 +594,18 @@ def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
     the very end of the file is tolerated (a common CSV-export artefact);
     a blank row anywhere else is treated as data corruption and raises.
 
-    :param path: path to the CSV file.
+    :param path: path to the CSV file. Must resolve to a real file — the
+        caller (API layer) is responsible for sandboxing this against an
+        upload directory to prevent path traversal. The parser does not
+        restrict the path here because it is a pure function with no
+        knowledge of where uploads live.
     :param bank: which bank exported it -- a key of :data:`_FORMATS`, and
         the same value stored in ``imports.source_bank``. Keyword-only, and
         required: the format is chosen by name, never guessed from content.
+    :param max_rows: maximum number of data rows to parse. A statement
+        with more rows raises :class:`StatementParseError` to prevent
+        unbounded memory usage from a malicious or malformed upload.
+        Default 5000 is generous for any real bank statement.
     :return: parsed lines in file order; ``[]`` for a file with no data rows.
     :raises UnknownStatementFormatError: no format is registered under
         ``bank``.
@@ -580,6 +616,12 @@ def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
     :raises StatementParseError: a data row is malformed (too few columns,
         unparseable date, or unparseable amount).
     """
+    # Resolve and validate the path — refuse symlinks and require a regular
+    # file. The API layer sandboxes against an upload root; this check is
+    # the parser's own defence-in-depth against being handed /etc/passwd.
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise ParserError(f"not a file: {path}")
     fmt = _FORMATS.get(bank)
     if fmt is None:
         raise UnknownStatementFormatError(bank)
@@ -588,7 +630,7 @@ def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
     # exports from UK bank web portals / Excel) and otherwise decodes plain
     # UTF-8 unchanged. Formats override it where the bank differs.
     try:
-        with path.open(newline="", encoding=fmt.encoding) as f:
+        with resolved.open(newline="", encoding=fmt.encoding) as f:
             reader = csv.reader(f)
             # Discard the preamble, then the header, by explicit index. NOT by
             # scanning for the first row that looks like a header: a scan
@@ -626,6 +668,12 @@ def parse_statement(path: Path, *, bank: str) -> list[ParsedLine]:
 
     lines: list[ParsedLine] = []
     for row_number, row in rows:
+        if len(lines) >= max_rows:
+            raise StatementParseError(
+                row_number,
+                f"exceeded maximum row count ({max_rows}); "
+                f"use a smaller export or raise max_rows",
+            )
         if not row:
             raise StatementParseError(row_number, "blank row")
         # Only for headerless formats. A format with a header has already had

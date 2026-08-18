@@ -39,8 +39,9 @@ import asyncio
 import contextlib
 import logging
 import signal
+from datetime import UTC
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from src.db.models import Import, JobQueue
 from src.db.session import worker_session_factory
@@ -57,6 +58,45 @@ logger = logging.getLogger(__name__)
 #: -- but two seconds is well inside "feels immediate" for an upload that
 #: has just been parsed.
 POLL_INTERVAL_SECONDS = 2.0
+
+#: Maximum time a single job handler may run before being killed.
+#: The categorise handler makes a third-party LLM call that can hang
+#: indefinitely; without a timeout, one stuck job deadlocks the entire
+#: worker for all tenants. 5 minutes is generous for a batch categorise.
+HANDLER_TIMEOUT_SECONDS = 300
+
+#: A job stuck in ``running`` longer than this is assumed to be from a
+#: crashed worker and is reset to ``queued`` by the reaper. Must exceed
+#: HANDLER_TIMEOUT_SECONDS so a legitimately-running job is never reaped.
+STALE_JOB_THRESHOLD_SECONDS = 600
+
+
+async def reap_stale_jobs() -> int:
+    """Reset jobs stuck in ``running`` longer than the stale threshold.
+
+    If a worker crashes after claiming a job (``status='running'``), the
+    job stays running forever with no heartbeat to revive it. This reaper
+    runs on every poll cycle and resets stale jobs back to ``queued``
+    so a live worker picks them up.
+
+    :returns: number of jobs reset to ``queued``.
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now(UTC) - timedelta(seconds=STALE_JOB_THRESHOLD_SECONDS)
+    async with worker_session_factory() as session:
+        result = await session.execute(
+            update(JobQueue)
+            .where(JobQueue.status == "running", JobQueue.updated_at < cutoff)
+            .values(status="queued", error=None)
+            .returning(JobQueue.id)
+            .execution_options(synchronize_session=False)
+        )
+        rows = result.scalars().all()
+        if rows:
+            logger.warning("reaped %d stale job(s): %s", len(rows), rows)
+        await session.commit()
+        return len(rows)
 
 
 async def claim_next_job() -> JobQueue | None:
@@ -85,7 +125,7 @@ async def claim_next_job() -> JobQueue | None:
         claimed = await session.scalar(
             update(JobQueue)
             .where(JobQueue.id == oldest_queued)
-            .values(status="running")
+            .values(status="running", updated_at=func.now())
             .returning(JobQueue)
             .execution_options(synchronize_session=False)
         )
@@ -161,8 +201,18 @@ async def run_one_job() -> bool:
                 f"known: {', '.join(sorted(HANDLERS))}"
             )
         async with worker_session_factory() as session:
-            await handler(session, job)
+            await asyncio.wait_for(
+                handler(session, job),
+                timeout=HANDLER_TIMEOUT_SECONDS,
+            )
             await session.commit()
+    except TimeoutError:
+        logger.error("job %s (%s) timed out after %ds", job.id, job.job_type, HANDLER_TIMEOUT_SECONDS)
+        await mark_failed(
+            job,
+            f"TimeoutError: handler exceeded {HANDLER_TIMEOUT_SECONDS}s "
+            f"(possible LLM hang or unresponsive provider)",
+        )
     except Exception as exc:
         # The one deliberately broad except in this repo. A handler runs
         # arbitrary work including a third-party LLM call, and the whole
@@ -194,6 +244,7 @@ async def poll_forever(
     :param poll_interval: seconds to wait when the queue was empty.
     """
     while not stop.is_set():
+        await reap_stale_jobs()
         worked = await run_one_job()
         if worked:
             continue
