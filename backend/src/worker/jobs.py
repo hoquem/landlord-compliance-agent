@@ -225,7 +225,11 @@ async def handle_categorise(session: AsyncSession, job: JobQueue) -> None:
                 for txn in pending
             ],
             "properties": [
-                OrgProperty(id=prop.id, label=_property_label(prop)).model_dump(mode="json")
+                OrgProperty(
+                    id=prop.id,
+                    label=_property_label(prop),
+                    mortgage_type=prop.mortgage_type or "none",
+                ).model_dump(mode="json")
                 for prop in properties
             ],
             "few_shot": [

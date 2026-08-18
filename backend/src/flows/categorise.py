@@ -182,10 +182,15 @@ class OrgProperty(BaseModel):
 
     :ivar id: property id.
     :ivar label: human-readable label (e.g. address) shown to the agent.
+    :ivar mortgage_type: ``interest_only``, ``repayment``, or ``none``.
+        The categoriser uses this to determine whether a finance-cost
+        transaction needs an interest split (repayment) or is fully
+        deductible (interest_only).
     """
 
     id: UUID
     label: str
+    mortgage_type: str = "none"
 
 
 class ConfirmedExample(BaseModel):
@@ -295,7 +300,10 @@ def _build_prompt(
     )
 
     if properties:
-        properties_block = "\n".join(f"- {p.id}: {p.label}" for p in properties)
+        properties_block = "\n".join(
+            f"- {p.id}: {p.label} (mortgage: {p.mortgage_type})"
+            for p in properties
+        )
     else:
         properties_block = "(no properties on file -- every property_id must be null)"
 
@@ -338,6 +346,15 @@ confidence score. Never invent certainty you do not have.
 landlord income or an allowable/capital property expense -- do not force a \
 personal line into a business category.
 - property_id must be either null or exactly one of the ids listed above.
+- For finance_costs_residential on a property with mortgage type \
+"interest_only", the full payment is deductible interest.
+- For finance_costs_residential on a property with mortgage type \
+"repayment", only the interest portion is deductible. Categorise as \
+finance_costs_residential but use LOW confidence (0.5) so the review \
+screen flags it for manual interest splitting.
+- For finance_costs_residential on a property with mortgage type "none", \
+check whether this is actually a loan payment -- if no mortgage is on file, \
+the payment may be personal_non_business.
 
 Reply with raw JSON and nothing else. No ``` fence, no explanation before \
 or after it, no markdown. Exactly this shape:
