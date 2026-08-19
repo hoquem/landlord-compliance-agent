@@ -246,6 +246,7 @@ class Import(Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("entities.id"))
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     source_bank: Mapped[str] = mapped_column(Text, nullable=False)
+    file_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     period_start: Mapped[datetime.date | None] = mapped_column(Date)
     period_end: Mapped[datetime.date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(

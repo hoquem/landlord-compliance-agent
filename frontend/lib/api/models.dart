@@ -95,17 +95,54 @@ class ImportSummary {
 
 /// One of the caller's entities.
 class Entity {
-  const Entity({required this.id, required this.name, required this.taxRegime});
+  const Entity({
+    required this.id,
+    required this.name,
+    required this.taxRegime,
+    this.ownershipType = 'sole_trader',
+    this.companyNumber,
+    this.utr,
+  });
 
   factory Entity.fromJson(Map<String, dynamic> json) => Entity(
     id: json['id'] as String,
     name: json['name'] as String,
     taxRegime: json['tax_regime'] as String,
+    ownershipType: json['ownership_type'] as String? ?? 'sole_trader',
+    companyNumber: json['company_number'] as String?,
+    utr: json['utr'] as String?,
   );
 
   final String id;
   final String name;
   final String taxRegime;
+
+  /// sole_trader, partnership, limited_company, or llp.
+  /// Determines tax treatment, mortgage relief, CGT, IHT, filing.
+  final String ownershipType;
+
+  /// Companies House number (limited companies + LLPs only).
+  final String? companyNumber;
+
+  /// Unique Tax Reference (sole traders + partnerships only).
+  final String? utr;
+
+  /// Human-readable label for the ownership type.
+  String get ownershipTypeLabel => switch (ownershipType) {
+    'sole_trader' => 'Sole Trader',
+    'partnership' => 'Partnership',
+    'limited_company' => 'Limited Company',
+    'llp' => 'LLP',
+    _ => ownershipType,
+  };
+
+  /// Badge text for the entity row.
+  String get badge => switch (ownershipType) {
+    'limited_company' => 'Ltd',
+    'llp' => 'LLP',
+    'partnership' => 'Part',
+    _ => 'Sole',
+  };
 }
 
 /// One property, as the review screen needs it.

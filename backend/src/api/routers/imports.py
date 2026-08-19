@@ -146,10 +146,29 @@ async def create_import(
     """
     content = await file.read()
 
+    # Compute file hash for dedup — prevents same statement being imported twice
+    import hashlib
+    file_hash = hashlib.sha256(content).hexdigest()
+
     async with org_session(auth.user_id) as session:
         # entity_id is client input; this is what stops one org filing a
         # statement against another org's entity.
         await get_owned_or_404(session, Entity, entity_id, auth, what="entity")
+
+        # Check for duplicate file — same file_hash for same entity
+        existing = await session.scalar(
+            select(Import).where(
+                Import.org_id == auth.org_id,
+                Import.entity_id == entity_id,
+                Import.file_hash == file_hash,
+            )
+        )
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This file was already imported on {existing.created_at.strftime('%d %b %Y')}. "
+                f"Duplicate import blocked.",
+            )
 
     # Refuse an unknown bank before storing anything: accepting a file we
     # could never read would leave an orphaned object behind.
@@ -186,6 +205,7 @@ async def create_import(
             entity_id=entity_id,
             file_path=file_path,
             source_bank=source_bank,
+            file_hash=file_hash,
             status="failed" if error_detail else "parsed",
             error_detail=error_detail,
         )
