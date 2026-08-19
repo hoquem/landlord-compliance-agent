@@ -77,20 +77,23 @@ class _ExportPanelState extends State<ExportPanel> {
   }
 
   /// Derive the current quarter + tax-year start from a date, mirroring
-  /// `core/quarters.py`: the UK tax year starts 6 April; Q1 is 6 Apr-5 Jul,
-  /// Q2 6 Jul-5 Oct, Q3 6 Oct-5 Jan, Q4 6 Jan-5 Apr.
+  /// `core/quarters.py`'s `quarter_for`: the UK tax year starts 6 April;
+  /// Q1 6 Apr-5 Jul, Q2 6 Jul-5 Oct, Q3 6 Oct-5 Jan, Q4 6 Jan-5 Apr.
   static (int, int) _currentFromNow(DateTime now) {
     final int taxYearStart =
-        now.month < 4 || (now.month == 4 && now.day < 6) ? now.year - 1 : now.year;
-    final int quarter;
-    if (now.month >= 4 && now.month <= 6) {
-      quarter = now.month == 4 && now.day < 6 ? 4 : 1;
-    } else if (now.month >= 7 && now.month <= 9) {
-      quarter = 2;
-    } else if (now.month >= 10 && now.month <= 12) {
-      quarter = 3;
-    } else {
-      quarter = 4;
+        !now.isBefore(DateTime(now.year, 4, 6)) ? now.year : now.year - 1;
+    // Same ordering as the backend's loop: the last start date `now` has
+    // reached wins, so Q4's Jan start (tax_year_start + 1) takes precedence
+    // over the earlier calendar-year starts.
+    final List<(DateTime, int)> starts = <(DateTime, int)>[
+      (DateTime(taxYearStart, 4, 6), 1),
+      (DateTime(taxYearStart, 7, 6), 2),
+      (DateTime(taxYearStart, 10, 6), 3),
+      (DateTime(taxYearStart + 1, 1, 6), 4),
+    ];
+    int quarter = 1;
+    for (final (DateTime start, int q) in starts) {
+      if (!now.isBefore(start)) quarter = q;
     }
     return (taxYearStart, quarter);
   }
