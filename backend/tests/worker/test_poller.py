@@ -428,6 +428,101 @@ async def test_proposals_are_written_with_confidence_and_the_job_id(
     assert txn["proposed_by"] == job_id
 
 
+async def test_pattern_rules_skip_the_llm_and_write_full_confidence(
+    org_user: OrgUser, flow
+) -> None:
+    """A rule-matched line is proposed without any LLM call, at 1.0.
+
+    ``flow`` is the recorder; its ``calls`` prove exactly which lines reached
+    the LLM. The two obvious lines must not, and must be written directly at
+    confidence 1.0 with ``proposed_by='pattern_rule'``.
+    """
+    entity_id, import_id = await seed_import(org_user)
+    # Three lines: two machine-categorisable, one genuinely ambiguous.
+    await seed_transaction(
+        org_user,
+        entity_id=entity_id,
+        import_id=import_id,
+        description="Counter Credit PINPOINT ESTATES L 98 BGC",
+    )
+    await seed_transaction(
+        org_user,
+        entity_id=entity_id,
+        import_id=import_id,
+        description="Mansgement : Yamin Hoque - Yamin Hoque",
+        when="2026-07-02",
+    )
+    await seed_transaction(
+        org_user,
+        entity_id=entity_id,
+        import_id=import_id,
+        description="AD/10192 : Central UK Vehicle Leasing LTD",
+        when="2026-07-03",
+    )
+    # The LLM will handle only the one unmatched line.
+    flow.proposals = StatementProposals(
+        proposals=[one_proposal(0, category=HmrcCategory.TRAVEL_VEHICLE)]
+    )
+    job_id = await enqueue(org_user, payload={"import_id": import_id})
+
+    await run_one_job()
+
+    rows = await txn_rows(org_user.org_id)
+    assert len(rows) == 3
+
+    by_desc = {r["description"]: r for r in rows}
+    pinned = by_desc["Counter Credit PINPOINT ESTATES L 98 BGC"]
+    assert pinned["hmrc_category"] == "rent_income"
+    assert pinned["confidence"] == Decimal("1.00")
+    assert pinned["proposed_by"] == "pattern_rule"
+    assert pinned["status"] == "proposed"
+
+    yamin = by_desc["Mansgement : Yamin Hoque - Yamin Hoque"]
+    assert yamin["hmrc_category"] == "service_costs"
+    assert yamin["confidence"] == Decimal("1.00")
+    assert yamin["proposed_by"] == "pattern_rule"
+    assert yamin["status"] == "proposed"
+
+    # Only the unmatched line reached the LLM, and it got the job id.
+    assert len(flow.calls) == 1
+    assert [l["description"] for l in flow.calls[0]["lines"]] == [
+        "AD/10192 : Central UK Vehicle Leasing LTD"
+    ]
+    llm_row = by_desc["AD/10192 : Central UK Vehicle Leasing LTD"]
+    assert llm_row["hmrc_category"] == "travel_vehicle"
+    assert llm_row["proposed_by"] == job_id
+    assert llm_row["confidence"] == Decimal("0.91")
+
+
+async def test_all_lines_pattern_matched_never_calls_the_llm(
+    org_user: OrgUser, flow
+) -> None:
+    """When every line matches a rule, no LLM call is made at all."""
+    entity_id, import_id = await seed_import(org_user)
+    await seed_transaction(
+        org_user,
+        entity_id=entity_id,
+        import_id=import_id,
+        description="Direct Debit BRITISH GAS BUSINE 000 DD",
+    )
+    await seed_transaction(
+        org_user,
+        entity_id=entity_id,
+        import_id=import_id,
+        description="Counter Credit METRO PREPAID LIMI BGC",
+        when="2026-07-02",
+    )
+    await enqueue(org_user, payload={"import_id": import_id})
+
+    await run_one_job()
+
+    assert flow.calls == [], "all lines matched by rules -- no LLM call expected"
+    rows = await txn_rows(org_user.org_id)
+    assert {r["hmrc_category"] for r in rows} == {"other_allowable"}
+    assert all(r["proposed_by"] == "pattern_rule" for r in rows)
+    assert all(r["confidence"] == Decimal("1.00") for r in rows)
+
+
 async def test_the_flow_is_given_parser_signed_amounts(org_user: OrgUser, flow) -> None:
     """Money out must arrive negative.
 

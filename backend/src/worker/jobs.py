@@ -31,6 +31,7 @@ API alongside the import it describes.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable
@@ -40,7 +41,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.audit import agent_audit
+from src.core.categories import HmrcCategory
+from src.core.pattern_rules import apply_rules
 from src.db.models import Import, JobQueue, Property, Transaction
+
+logger = logging.getLogger(__name__)
 
 #: The environment variable that actually disables CrewAI's telemetry, as
 #: measured against the installed version rather than taken from its docs.
@@ -212,18 +217,47 @@ async def handle_categorise(session: AsyncSession, job: JobQueue) -> None:
         )
     )
 
+    # Build the flow's line shape once, in stable order: position in this
+    # list *is* the index both the pattern rules and the LLM proposals map
+    # back to `pending`.
+    lines = [
+        StatementLineInput(
+            date=txn.date, description=txn.description, amount=_signed_for_flow(txn)
+        )
+        for txn in pending
+    ]
+
+    # Pre-categorise the obvious lines deterministically, before any LLM
+    # call. `apply_rules` keeps each matched line's original index so its
+    # proposal lands on the right transaction; the residual goes to the LLM.
+    matched, unmatched = apply_rules(lines)
+    matched_indices = {m.index for m in matched}
+    # Unmatched keeps original order, so the i-th unmatched line is the i-th
+    # remaining transaction in `pending`.
+    unmatched_indices = [i for i in range(len(pending)) if i not in matched_indices]
+
+    for m in matched:
+        txn = pending[m.index]
+        _write_proposal(txn, m.rule.category, None, "1.00", "pattern_rule", job, session)
+
+    if matched:
+        logger.info(
+            "categorise: %d/%d lines matched by pattern rules (skip LLM)",
+            len(matched),
+            len(pending),
+        )
+    if unmatched:
+        logger.info("categorise: %d lines sent to LLM", len(unmatched))
+    else:
+        return
+
     flow = CategoriseStatementFlow()
     # `kickoff_async` rather than `kickoff`: the sync entry point detects a
     # running loop and hops to a ThreadPoolExecutor, blocking this one on
     # `.result()`. Awaiting the async form skips the hop entirely.
     await flow.kickoff_async(
         {
-            "lines": [
-                StatementLineInput(
-                    date=txn.date, description=txn.description, amount=_signed_for_flow(txn)
-                ).model_dump(mode="json")
-                for txn in pending
-            ],
+            "lines": [line.model_dump(mode="json") for line in unmatched],
             "properties": [
                 OrgProperty(
                     id=prop.id,
@@ -249,35 +283,69 @@ async def handle_categorise(session: AsyncSession, job: JobQueue) -> None:
         raise RuntimeError("flow completed without producing proposals")
 
     for proposal in proposals.proposals:
-        txn = pending[proposal.line_index]
-        before = {
-            "hmrc_category": None,
-            "property_id": None,
-            "confidence": None,
-            "proposed_by": None,
-            "status": txn.status,
-        }
-        txn.hmrc_category = proposal.hmrc_category
-        txn.property_id = proposal.property_id
-        # `str(Decimal(float))` would carry the float's full binary
-        # expansion into a numeric(3,2) column; via `str` it does not.
-        txn.confidence = Decimal(str(proposal.confidence))
-        txn.proposed_by = str(job.id)
-        txn.status = "proposed"
-        session.add(
-            agent_audit(
-                job.org_id,
-                "transaction.proposed",
-                before=before,
-                after={
-                    "hmrc_category": txn.hmrc_category.value,
-                    "property_id": str(txn.property_id) if txn.property_id else None,
-                    "confidence": str(txn.confidence),
-                    "proposed_by": txn.proposed_by,
-                    "status": txn.status,
-                },
-            )
+        txn = pending[unmatched_indices[proposal.line_index]]
+        _write_proposal(
+            txn,
+            proposal.hmrc_category,
+            proposal.property_id,
+            str(proposal.confidence),
+            str(job.id),
+            job,
+            session,
         )
+
+
+def _write_proposal(
+    txn: Transaction,
+    hmrc_category: HmrcCategory,
+    property_id: uuid.UUID | None,
+    confidence: str,
+    proposed_by: str,
+    job: JobQueue,
+    session: AsyncSession,
+) -> None:
+    """Persist one proposed categorisation and audit it.
+
+    ``proposed_by`` distinguishes the two provenance paths: ``'pattern_rule'``
+    for a deterministic rule match (confidence 1.0) vs. the job id for an
+    LLM proposal.
+
+    :param txn: the transaction row to update (already scoped to the org).
+    :param hmrc_category: the category being proposed.
+    :param property_id: property attribution, or ``None``.
+    :param confidence: the confidence as a decimal string (pattern rules pass
+        ``"1.00"``; ``str(Decimal(float))`` would carry the float's full
+        binary expansion into a numeric(3,2) column, via ``str`` it does not).
+    :param proposed_by: ``'pattern_rule'`` or the job id.
+    :param job: the claimed job (its ``org_id`` scopes the audit).
+    :param session: the open session; the caller commits.
+    """
+    before = {
+        "hmrc_category": None,
+        "property_id": None,
+        "confidence": None,
+        "proposed_by": None,
+        "status": txn.status,
+    }
+    txn.hmrc_category = hmrc_category
+    txn.property_id = property_id
+    txn.confidence = Decimal(confidence)
+    txn.proposed_by = proposed_by
+    txn.status = "proposed"
+    session.add(
+        agent_audit(
+            job.org_id,
+            "transaction.proposed",
+            before=before,
+            after={
+                "hmrc_category": txn.hmrc_category.value,
+                "property_id": str(txn.property_id) if txn.property_id else None,
+                "confidence": str(txn.confidence),
+                "proposed_by": txn.proposed_by,
+                "status": txn.status,
+            },
+        )
+    )
 
 
 #: Handler per ``job_queue.type``. A job whose type is absent fails loudly
