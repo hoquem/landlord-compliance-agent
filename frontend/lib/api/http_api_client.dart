@@ -188,6 +188,15 @@ class HttpApiClient implements ApiClient {
   }
 
   @override
+  Future<void> deleteImport(String importId) async {
+    final http.Response response = await _client.delete(
+      Uri.parse('$baseUrl/imports/$importId'),
+      headers: _headers,
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
   Future<ExportResult> exportQuarter({
     required String entityId,
     required int taxYear,

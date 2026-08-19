@@ -328,17 +328,23 @@ class EntityCount {
     required this.entityId,
     required this.entityName,
     required this.needsDecision,
+    required this.quarterLabel,
   });
 
   factory EntityCount.fromJson(Map<String, dynamic> json) => EntityCount(
     entityId: json['entity_id'] as String,
     entityName: json['entity_name'] as String,
     needsDecision: json['needs_decision'] as int,
+    quarterLabel: json['quarter_label'] as String? ?? '',
   );
 
   final String entityId;
   final String entityName;
   final int needsDecision;
+
+  /// The current quarter as prose, e.g. `Q1 2026-27`, so each entity line
+  /// reads "Carlton Investment Ltd: 30 (Q1 2026-27)".
+  final String quarterLabel;
 }
 
 class DashboardSummary {
@@ -350,6 +356,8 @@ class DashboardSummary {
     required this.expiredCertificates,
     required this.unreadableImports,
     required this.uncategorisedImports,
+    this.currentQuarter,
+    this.currentTaxYear,
     this.entityBreakdown = const [],
   });
 
@@ -362,6 +370,8 @@ class DashboardSummary {
         expiredCertificates: json['expired_certificates'] as int,
         unreadableImports: json['unreadable_imports'] as int,
         uncategorisedImports: json['uncategorised_imports'] as int,
+        currentQuarter: json['current_quarter'] as String?,
+        currentTaxYear: json['current_tax_year'] as String?,
         entityBreakdown: (json['entity_breakdown'] as List<dynamic>?)
             ?.map((e) => EntityCount.fromJson(e as Map<String, dynamic>))
             .toList() ??
@@ -379,6 +389,24 @@ class DashboardSummary {
   /// Files that parsed cleanly and whose categorisation then failed.
   /// Deliberately separate: the data is fine and sitting there.
   final int uncategorisedImports;
+
+  /// The tax-year quarter that today falls in, `q1`..`q4`. Same for every
+  /// entity -- MTD ITSA deadlines are shared. Computed by the backend, never
+  /// here.
+  final String? currentQuarter;
+
+  /// The tax year today falls in, e.g. `2026-27`. Computed by the backend.
+  final String? currentTaxYear;
+
+  /// The current quarter as prose, e.g. `Q1 2026-27`, or empty if the
+  /// backend didn't supply it. Useful for entity lines and as the export
+  /// panel's default.
+  String get currentQuarterLabel {
+    final String q = currentQuarter ?? '';
+    final String y = currentTaxYear ?? '';
+    if (q.isEmpty || y.isEmpty) return '';
+    return 'Q${q.replaceFirst('q', '')} $y';
+  }
 
   /// Per-entity breakdown of needs_decision counts.
   final List<EntityCount> entityBreakdown;

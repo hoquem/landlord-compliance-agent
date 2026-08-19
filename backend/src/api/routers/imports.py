@@ -267,3 +267,28 @@ async def list_imports(auth: CurrentAuth) -> list[ImportRead]:
             select(Import).where(Import.org_id == auth.org_id).order_by(Import.created_at, Import.id)
         )
         return [ImportRead.model_validate(r) for r in records]
+
+
+@router.delete("/imports/{import_id}")
+async def delete_import(
+    import_id: uuid.UUID,
+    auth: CurrentAuth,
+) -> dict[str, str]:
+    """Delete an import and all its transactions (CASCADE).
+
+    Used when an import was uploaded in error or assigned to the wrong entity.
+    The foreign key on ``transactions.import_id`` has ``ON DELETE CASCADE``,
+    so all rows are removed atomically.
+
+    :param import_id: the import to remove.
+    :param auth: the authenticated caller.
+    :raises HTTPException: 404 if the import is not the caller's.
+    :returns: confirmation.
+    """
+    async with org_session(auth.user_id) as session:
+        record = await get_owned_or_404(
+            session, Import, import_id, auth, what="import",
+        )
+        await session.delete(record)
+        await session.commit()
+    return {"status": "deleted"}

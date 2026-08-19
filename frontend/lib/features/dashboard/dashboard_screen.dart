@@ -84,6 +84,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_exporting) ...<Widget>[
             ExportPanel(
               api: widget.api,
+              initialSummary: _summary,
               onClose: () => setState(() => _exporting = false),
             ),
             const SizedBox(height: Spacing.xl),
@@ -117,7 +118,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       for (final e in s.entityBreakdown)
         if (e.needsDecision > 0)
           _Line(
-            text: '  ${e.entityName}: ${e.needsDecision}',
+            text: '  ${e.entityName}: ${e.needsDecision} '
+                '(${e.quarterLabel.isNotEmpty ? e.quarterLabel : s.currentQuarterLabel})',
             state: WorkState.needsYou,
           ),
       if (s.unreadableImports > 0)

@@ -58,6 +58,7 @@ class _ImportsScreenState extends State<ImportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final Palette palette = Palette.of(Theme.of(context).brightness);
     return ScreenScaffold(
       title: 'Imports',
       subtitle: 'Bank statements you have uploaded, newest last.',
@@ -82,7 +83,47 @@ class _ImportsScreenState extends State<ImportsScreen> {
           if (_imports != null && _imports!.isEmpty && !_uploading)
             const _NoImportsYet(),
           for (final ImportSummary row in _imports ?? <ImportSummary>[])
-            _ImportRow(record: row),
+            _ImportRow(
+              record: row,
+              onDelete: () async {
+                final bool? confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Delete import?'),
+                    content: Text(
+                      'Delete ${row.sourceBank} import from ${_ImportRow._when(row.createdAt)}?\n\n'
+                      'This removes all ${row.sourceBank} transactions from this import.\n'
+                      'This cannot be undone.',
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: palette.danger,
+                        ),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  try {
+                    await widget.api.deleteImport(row.id);
+                    _load();
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to delete: $e')),
+                      );
+                    }
+                  }
+                }
+              },
+            ),
         ],
       ),
     );
@@ -91,9 +132,10 @@ class _ImportsScreenState extends State<ImportsScreen> {
 
 /// One import: what it was, how it went, and what to do if it went wrong.
 class _ImportRow extends StatelessWidget {
-  const _ImportRow({required this.record});
+  const _ImportRow({required this.record, required this.onDelete});
 
   final ImportSummary record;
+  final Future<void> Function() onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -118,6 +160,13 @@ class _ImportRow extends StatelessWidget {
                     child: Text(record.sourceBank, style: text.titleMedium),
                   ),
                   StatusPill(state: record.state, label: record.label),
+                  const SizedBox(width: Spacing.sm),
+                  IconButton(
+                    tooltip: 'Delete import',
+                    iconSize: 18,
+                    icon: const Icon(Icons.close),
+                    onPressed: onDelete,
+                  ),
                 ],
               ),
               const SizedBox(height: Spacing.xs),

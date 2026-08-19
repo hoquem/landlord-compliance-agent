@@ -17,10 +17,20 @@ import '../../theme/tokens.dart';
 import 'download_opener.dart';
 
 class ExportPanel extends StatefulWidget {
-  const ExportPanel({required this.api, required this.onClose, super.key});
+  const ExportPanel({
+    required this.api,
+    required this.onClose,
+    this.initialSummary,
+    super.key,
+  });
 
   final ApiClient api;
   final VoidCallback onClose;
+
+  /// The dashboard's current-quarter context, used to pre-fill the
+  /// quarter and tax-year dropdowns. When absent, they default from
+  /// `DateTime.now()` instead.
+  final DashboardSummary? initialSummary;
 
   @override
   State<ExportPanel> createState() => _ExportPanelState();
@@ -29,8 +39,8 @@ class ExportPanel extends StatefulWidget {
 class _ExportPanelState extends State<ExportPanel> {
   List<Entity> _entities = <Entity>[];
   String? _entityId;
-  int _taxYear = 2026;
-  int _quarter = 1;
+  late int _taxYear;
+  late int _quarter;
   bool _busy = false;
   String? _error;
   ExportResult? _result;
@@ -38,7 +48,51 @@ class _ExportPanelState extends State<ExportPanel> {
   @override
   void initState() {
     super.initState();
+    final (int taxYear, int quarter) = _currentFromSummary();
+    _taxYear = taxYear;
+    _quarter = quarter;
     _loadEntities();
+  }
+
+  /// The tax year (start year) and quarter that today falls in.
+  ///
+  /// Prefers the backend's own answer from the dashboard -- the same source
+  /// the deadline comes from -- and falls back to a local derivation only
+  /// when the dashboard hasn't loaded. The backend remains authoritative
+  /// when it has spoken.
+  (int, int) _currentFromSummary() {
+    final DashboardSummary? s = widget.initialSummary;
+    if (s != null) {
+      final int? q = s.currentQuarter == null
+          ? null
+          : int.tryParse(s.currentQuarter!.replaceFirst('q', ''));
+      final int? y = s.currentTaxYear == null
+          ? null
+          : int.tryParse(s.currentTaxYear!.split('-').first);
+      if (q != null && y != null && y >= 2026 && q >= 1 && q <= 4) {
+        return (y, q);
+      }
+    }
+    return _currentFromNow(DateTime.now());
+  }
+
+  /// Derive the current quarter + tax-year start from a date, mirroring
+  /// `core/quarters.py`: the UK tax year starts 6 April; Q1 is 6 Apr-5 Jul,
+  /// Q2 6 Jul-5 Oct, Q3 6 Oct-5 Jan, Q4 6 Jan-5 Apr.
+  static (int, int) _currentFromNow(DateTime now) {
+    final int taxYearStart =
+        now.month < 4 || (now.month == 4 && now.day < 6) ? now.year - 1 : now.year;
+    final int quarter;
+    if (now.month >= 4 && now.month <= 6) {
+      quarter = now.month == 4 && now.day < 6 ? 4 : 1;
+    } else if (now.month >= 7 && now.month <= 9) {
+      quarter = 2;
+    } else if (now.month >= 10 && now.month <= 12) {
+      quarter = 3;
+    } else {
+      quarter = 4;
+    }
+    return (taxYearStart, quarter);
   }
 
   Future<void> _loadEntities() async {

@@ -123,6 +123,9 @@ abstract class ApiClient {
   /// to keep; what it was survives in the audit row.
   Future<void> deleteCertificate(String certificateId);
 
+  /// Delete an import and all its transactions (CASCADE).
+  Future<void> deleteImport(String importId);
+
   /// Generate a quarter's export pack.
   Future<ExportResult> exportQuarter({
     required String entityId,

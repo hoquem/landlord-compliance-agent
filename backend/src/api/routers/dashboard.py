@@ -33,7 +33,11 @@ from sqlalchemy import func, select
 
 from src.api.auth import CurrentAuth
 from src.core.certificates import certificate_status, uk_today
-from src.core.quarters import next_update_deadline
+from src.core.quarters import (
+    format_tax_year,
+    next_update_deadline,
+    quarter_for,
+)
 from src.db.models import ComplianceCertificate, Entity, Import, Transaction
 from src.db.session import org_session
 
@@ -52,6 +56,13 @@ class DashboardRead(BaseModel):
     :ivar next_deadline: the next statutory quarterly-update date.
     :ivar days_until_deadline: whole days from today, UK clock. Negative if
         the deadline has passed, which is worth showing rather than hiding.
+    :ivar current_quarter: the tax-year quarter that today falls in,
+        ``\"q1\"``..``\"q4\"``. Same for every entity -- MTD ITSA deadlines
+        are shared -- so it belongs on the dashboard, not the per-entity
+        rows.
+    :ivar current_tax_year: the tax year today falls in, e.g. ``\"2026-27\"``
+        (the ``mtd_quarters.tax_year`` format, from
+        :func:`~src.core.quarters.format_tax_year`).
     :ivar expiring_certificates: certificates within 60 days of lapsing.
     :ivar expired_certificates: certificates already lapsed.
     :ivar unreadable_imports: files the parser refused. Bad input; the fix is
@@ -67,6 +78,8 @@ class DashboardRead(BaseModel):
     entity_breakdown: list["EntityCount"] = []
     next_deadline: datetime.date
     days_until_deadline: int
+    current_quarter: str
+    current_tax_year: str
     expiring_certificates: int
     expired_certificates: int
     unreadable_imports: int
@@ -74,10 +87,18 @@ class DashboardRead(BaseModel):
 
 
 class EntityCount(BaseModel):
-    """Per-entity count for the dashboard breakdown."""
+    """Per-entity count for the dashboard breakdown.
+
+    :ivar quarter_label: the current quarter as prose, e.g. ``\"Q1 2026-27\"``
+        -- so each entity line reads *\"Carlton Investment Ltd: 30 lines
+        (Q1 2026-27)\"*. The label belongs on each row because the dashboard
+        reads as a list of statements, and the row is where the eye lands.
+    """
+
     entity_id: str
     entity_name: str
     needs_decision: int
+    quarter_label: str
 
 
 @router.get("/dashboard")
@@ -88,6 +109,8 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
     :returns: the counts and the next deadline.
     """
     today = uk_today()
+    tax_year_start, quarter_num = quarter_for(today)
+    quarter_label = f"Q{quarter_num} {format_tax_year(tax_year_start)}"
 
     async with org_session(auth.user_id) as session:
         needs_decision = await session.scalar(
@@ -147,6 +170,7 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
                 entity_id=str(row.id),
                 entity_name=row.name,
                 needs_decision=row.cnt,
+                quarter_label=quarter_label,
             )
             for row in entity_rows
             if row.cnt > 0
@@ -158,6 +182,8 @@ async def get_dashboard(auth: CurrentAuth) -> DashboardRead:
         entity_breakdown=entity_breakdown,
         next_deadline=deadline,
         days_until_deadline=(deadline - today).days,
+        current_quarter=f"q{quarter_num}",
+        current_tax_year=format_tax_year(tax_year_start),
         expiring_certificates=expiring,
         expired_certificates=expired,
         unreadable_imports=unreadable_imports or 0,
