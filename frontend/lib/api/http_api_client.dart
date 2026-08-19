@@ -221,15 +221,20 @@ class HttpApiClient implements ApiClient {
   @override
   Future<void> createProperty({
     required String addressLine1,
+    String? addressLine2,
     required String city,
     required String postcode,
     required String financeCostClassification,
+    String? mortgageType,
   }) async {
     await _postJson('/properties', <String, Object?>{
       'address_line1': addressLine1,
+      if (addressLine2 != null && addressLine2.isNotEmpty)
+        'address_line2': addressLine2,
       'city': city,
       'postcode': postcode,
       'finance_cost_classification': financeCostClassification,
+      if (mortgageType != null) 'mortgage_type': mortgageType,
     });
   }
 
@@ -262,15 +267,39 @@ class HttpApiClient implements ApiClient {
   }
 
   @override
-  Future<void> updateProperty(String propertyId, {String? mortgageType}) async {
+  Future<void> updateProperty(
+    String propertyId, {
+    String? mortgageType,
+    String? addressLine1,
+    String? addressLine2,
+    String? city,
+    String? postcode,
+    String? financeCostClassification,
+  }) async {
     final Map<String, Object?> body = <String, Object?>{};
     if (mortgageType != null) body['mortgage_type'] = mortgageType;
+    if (addressLine1 != null) body['address_line1'] = addressLine1;
+    if (addressLine2 != null) body['address_line2'] = addressLine2;
+    if (city != null) body['city'] = city;
+    if (postcode != null) body['postcode'] = postcode;
+    if (financeCostClassification != null) {
+      body['finance_cost_classification'] = financeCostClassification;
+    }
     if (body.isEmpty) return;
 
     final http.Response response = await _client.patch(
       Uri.parse('$baseUrl/properties/$propertyId'),
       headers: <String, String>{..._headers, 'Content-Type': 'application/json'},
       body: jsonEncode(body),
+    );
+    if (response.statusCode >= 300) _fail(response);
+  }
+
+  @override
+  Future<void> deleteProperty(String propertyId) async {
+    final http.Response response = await _client.delete(
+      Uri.parse('$baseUrl/properties/$propertyId'),
+      headers: _headers,
     );
     if (response.statusCode >= 300) _fail(response);
   }

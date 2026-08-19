@@ -18,6 +18,8 @@ import '../../app/widgets/screen_scaffold.dart';
 import '../../app/widgets/status_pill.dart';
 import '../../theme/tokens.dart';
 import 'ownership_editor.dart';
+import 'property_form.dart';
+import 'entity_form.dart';
 
 class PortfolioScreen extends StatefulWidget {
   const PortfolioScreen({required this.api, super.key});
@@ -34,6 +36,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   List<PropertyCertificates> _certs = <PropertyCertificates>[];
   String? _error;
   String? _expandedPropertyId;
+  bool _addingProperty = false;
+  bool _addingEntity = false;
 
   @override
   void initState() {
@@ -72,6 +76,30 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
       subtitle: _properties.isEmpty && _entities.isEmpty
           ? null
           : '${_properties.length} properties · ${realEntities.length} entities',
+      action: _addingProperty || _addingEntity
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TextButton.icon(
+                  onPressed: () => setState(() {
+                    _addingEntity = true;
+                    _addingProperty = false;
+                  }),
+                  icon: const Icon(Icons.account_balance, size: 18),
+                  label: const Text('Add entity'),
+                ),
+                const SizedBox(width: Spacing.sm),
+                FilledButton.icon(
+                  onPressed: () => setState(() {
+                    _addingProperty = true;
+                    _addingEntity = false;
+                  }),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add property'),
+                ),
+              ],
+            ),
       child: ListView(
         padding: const EdgeInsets.symmetric(
           horizontal: Spacing.xl,
@@ -80,6 +108,24 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         children: <Widget>[
           if (_error != null)
             _ErrorLine(message: _error!, onRetry: _load),
+          if (_addingEntity)
+            EntityForm(
+              api: widget.api,
+              onDone: () {
+                setState(() => _addingEntity = false);
+                _load();
+              },
+              onCancel: () => setState(() => _addingEntity = false),
+            ),
+          if (_addingProperty)
+            PropertyForm(
+              api: widget.api,
+              onDone: () {
+                setState(() => _addingProperty = false);
+                _load();
+              },
+              onCancel: () => setState(() => _addingProperty = false),
+            ),
           for (final PropertyRef p in _properties)
             _PropertyPanel(
               key: ValueKey(p.id),
@@ -142,6 +188,7 @@ class _PropertyPanel extends StatefulWidget {
 class _PropertyPanelState extends State<_PropertyPanel> {
   bool _editingMortgage = false;
   bool _editingOwnership = false;
+  bool _editingAddress = false;
   String? _selectedMortgageType;
   List<OwnershipShare>? _ownership;
 
@@ -247,6 +294,43 @@ class _PropertyPanelState extends State<_PropertyPanel> {
     }
   }
 
+  Future<void> _confirmDelete(BuildContext context) async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('Remove property?'),
+        content: Text(
+          'Remove ${widget.property.label}?\n\n'
+          'This cannot be undone.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: widget.palette.danger,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      await widget.api.deleteProperty(widget.property.id);
+      if (!mounted) return;
+      widget.onSaved();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final Palette palette = widget.palette;
@@ -298,6 +382,14 @@ class _PropertyPanelState extends State<_PropertyPanel> {
                     size: 18,
                     color: palette.textMuted,
                   ),
+                  const SizedBox(width: Spacing.xs),
+                  IconButton(
+                    tooltip: 'Remove property',
+                    iconSize: 18,
+                    icon: const Icon(Icons.close),
+                    color: palette.textMuted,
+                    onPressed: () => _confirmDelete(context),
+                  ),
                 ],
               ),
             ),
@@ -316,6 +408,35 @@ class _PropertyPanelState extends State<_PropertyPanel> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  // Address (editable)
+                  _DetailRow(
+                    label: 'Address',
+                    value: widget.property.label,
+                    palette: palette,
+                    onEdit: () => setState(
+                      () => _editingAddress = !_editingAddress,
+                    ),
+                  ),
+                  if (_editingAddress) ...<Widget>[
+                    const SizedBox(height: Spacing.xs),
+                    _AddressEditor(
+                      api: widget.api,
+                      propertyId: widget.property.id,
+                      initialAddressLine1:
+                          widget.property.addressLine1 ?? '',
+                      initialAddressLine2:
+                          widget.property.addressLine2 ?? '',
+                      initialCity: widget.property.city ?? '',
+                      initialPostcode: widget.property.postcode ?? '',
+                      onSaved: () {
+                        setState(() => _editingAddress = false);
+                        widget.onSaved();
+                      },
+                      onCancel: () =>
+                          setState(() => _editingAddress = false),
+                    ),
+                  ],
+
                   // Entity (from ownership)
                   _DetailRow(
                     label: 'Entity',
@@ -662,6 +783,187 @@ class _MortgageEditor extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Address Editor ─────────────────────────────────────────────
+class _AddressEditor extends StatefulWidget {
+  const _AddressEditor({
+    required this.api,
+    required this.propertyId,
+    required this.initialAddressLine1,
+    required this.initialAddressLine2,
+    required this.initialCity,
+    required this.initialPostcode,
+    required this.onSaved,
+    required this.onCancel,
+  });
+
+  final ApiClient api;
+  final String propertyId;
+  final String initialAddressLine1;
+  final String initialAddressLine2;
+  final String initialCity;
+  final String initialPostcode;
+  final VoidCallback onSaved;
+  final VoidCallback onCancel;
+
+  @override
+  State<_AddressEditor> createState() => _AddressEditorState();
+}
+
+class _AddressEditorState extends State<_AddressEditor> {
+  late final TextEditingController _address1;
+  late final TextEditingController _address2;
+  late final TextEditingController _city;
+  late final TextEditingController _postcode;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _address1 = TextEditingController(text: widget.initialAddressLine1);
+    _address2 = TextEditingController(text: widget.initialAddressLine2);
+    _city = TextEditingController(text: widget.initialCity);
+    _postcode = TextEditingController(text: widget.initialPostcode);
+  }
+
+  @override
+  void dispose() {
+    _address1.dispose();
+    _address2.dispose();
+    _city.dispose();
+    _postcode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.updateProperty(
+        widget.propertyId,
+        addressLine1: _address1.text.trim(),
+        addressLine2: _address2.text.trim(),
+        city: _city.text.trim(),
+        postcode: _postcode.text.trim(),
+      );
+      if (!mounted) return;
+      widget.onSaved();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Palette palette = Palette.of(Theme.of(context).brightness);
+    return Padding(
+      padding: const EdgeInsets.only(left: Spacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _field(
+            palette,
+            label: 'Address line 1',
+            controller: _address1,
+          ),
+          const SizedBox(height: Spacing.sm),
+          _field(
+            palette,
+            label: 'Address line 2',
+            controller: _address2,
+          ),
+          const SizedBox(height: Spacing.sm),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                flex: 2,
+                child: _field(
+                  palette,
+                  label: 'City',
+                  controller: _city,
+                ),
+              ),
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: _field(
+                  palette,
+                  label: 'Postcode',
+                  controller: _postcode,
+                ),
+              ),
+            ],
+          ),
+          if (_error != null) ...<Widget>[
+            const SizedBox(height: Spacing.sm),
+            Text(
+              '$_error.',
+              style: AppType.body.copyWith(color: palette.danger),
+            ),
+          ],
+          const SizedBox(height: Spacing.sm),
+          Row(
+            children: <Widget>[
+              FilledButton(
+                onPressed: _busy ? null : _save,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(60, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(_busy ? 'Saving' : 'Save'),
+              ),
+              const SizedBox(width: Spacing.sm),
+              TextButton(
+                onPressed: _busy ? null : widget.onCancel,
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(
+    Palette palette, {
+    required String label,
+    required TextEditingController controller,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(label, style: AppType.meta.copyWith(color: palette.textMuted)),
+        const SizedBox(height: Spacing.xs),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
+          decoration: BoxDecoration(
+            color: palette.bgRaised,
+            border: Border.all(color: palette.ruleStrong),
+            borderRadius: Radii.smRadius,
+          ),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextField(
+              controller: controller,
+              style: AppType.body.copyWith(color: palette.textBody),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

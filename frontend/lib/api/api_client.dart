@@ -139,9 +139,11 @@ abstract class ApiClient {
   /// Create a property.
   Future<void> createProperty({
     required String addressLine1,
+    String? addressLine2,
     required String city,
     required String postcode,
     required String financeCostClassification,
+    String? mortgageType,
   });
 
   /// One property's current ownership set.
@@ -154,8 +156,23 @@ abstract class ApiClient {
   /// rule without reading the rest first.
   Future<void> setOwnership(String propertyId, List<OwnershipShare> shares);
 
-  /// Update a property's fields (mortgage_type, etc).
-  Future<void> updateProperty(String propertyId, {String? mortgageType});
+  /// Update a property's fields (address, mortgage_type, etc).
+  ///
+  /// Only the named, non-null fields are sent; the backend PATCHes whatever
+  /// is present and leaves the rest alone.
+  Future<void> updateProperty(
+    String propertyId, {
+    String? mortgageType,
+    String? addressLine1,
+    String? addressLine2,
+    String? city,
+    String? postcode,
+    String? financeCostClassification,
+  });
+
+  /// Remove one property. The backend owns the choice of what happens to
+  /// the transactions and ownership rows that point at it.
+  Future<void> deleteProperty(String propertyId);
 
   /// Bank names the parser accepts.
   ///

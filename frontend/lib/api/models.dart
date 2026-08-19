@@ -113,6 +113,10 @@ class PropertyRef {
   const PropertyRef({
     required this.id,
     required this.label,
+    this.addressLine1,
+    this.addressLine2,
+    this.city,
+    this.postcode,
     this.mortgageType = 'none',
     this.financeCostClassification = 'residential',
     this.epcRating,
@@ -127,6 +131,10 @@ class PropertyRef {
       json['address_line1'] as String?,
       json['postcode'] as String?,
     ].whereType<String>().join(', '),
+    addressLine1: json['address_line1'] as String?,
+    addressLine2: json['address_line2'] as String?,
+    city: json['city'] as String?,
+    postcode: json['postcode'] as String?,
     mortgageType: json['mortgage_type'] as String? ?? 'none',
     financeCostClassification:
         json['finance_cost_classification'] as String? ?? 'residential',
@@ -140,6 +148,14 @@ class PropertyRef {
 
   final String id;
   final String label;
+
+  /// The parts of the address, kept for inline editing. The backend returns
+  /// them separately; `label` is the display form but an editor needs the
+  /// raw fields to prefill.
+  final String? addressLine1;
+  final String? addressLine2;
+  final String? city;
+  final String? postcode;
 
   /// `none`, `interest_only` or `repayment`. Only `repayment` changes
   /// anything: a payment on such a property is part interest and part

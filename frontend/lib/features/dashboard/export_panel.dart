@@ -14,6 +14,7 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../theme/tokens.dart';
+import 'download_opener.dart';
 
 class ExportPanel extends StatefulWidget {
   const ExportPanel({required this.api, required this.onClose, super.key});
@@ -241,7 +242,23 @@ class _Files extends StatelessWidget {
         const SizedBox(height: Spacing.sm),
         for (final ExportDocument d in result.documents)
           TextButton(
-            onPressed: () => api.downloadUrl(d.id),
+            onPressed: () async {
+              // Resolve the short-lived signed URL, then open it in a new
+              // browser tab so the document downloads. On Flutter web the
+              // URL must be opened by a browser call, not an HTTP request —
+              // the signed URL is a GET, and opening it in a tab is what
+              // hands the browser the document to save.
+              try {
+                final String url = await api.downloadUrl(d.id);
+                if (url.isNotEmpty) openDownloadUrl(url);
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Could not open download: $e')),
+                  );
+                }
+              }
+            },
             child: Text(d.label),
           ),
       ],

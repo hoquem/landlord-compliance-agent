@@ -130,6 +130,8 @@ class FakeApiClient implements ApiClient {
   Object? failSetOwnership;
   List<Map<String, String>> createdEntities = <Map<String, String>>[];
   List<Map<String, String>> createdProperties = <Map<String, String>>[];
+  List<Map<String, String?>> updatedProperties = <Map<String, String?>>[];
+  List<String> deletedProperties = <String>[];
 
   @override
   Future<void> createEntity({
@@ -142,11 +144,43 @@ class FakeApiClient implements ApiClient {
   @override
   Future<void> createProperty({
     required String addressLine1,
+    String? addressLine2,
     required String city,
     required String postcode,
     required String financeCostClassification,
+    String? mortgageType,
   }) async {
     createdProperties.add(<String, String>{'address_line1': addressLine1});
+  }
+
+  @override
+  Future<void> updateProperty(
+    String propertyId, {
+    String? mortgageType,
+    String? addressLine1,
+    String? addressLine2,
+    String? city,
+    String? postcode,
+    String? financeCostClassification,
+  }) async {
+    updatedProperties.add(<String, String?>{
+      'id': propertyId,
+      'mortgage_type': mortgageType,
+      'address_line1': addressLine1,
+      'address_line2': addressLine2,
+      'city': city,
+      'postcode': postcode,
+      'finance_cost_classification': financeCostClassification,
+    });
+  }
+
+  @override
+  Future<void> deleteProperty(String propertyId) async {
+    deletedProperties.add(propertyId);
+    properties = <PropertyRef>[
+      for (final PropertyRef p in properties)
+        if (p.id != propertyId) p,
+    ];
   }
 
   @override
